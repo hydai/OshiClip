@@ -12,6 +12,7 @@ import {
 import { UpdateDialog } from "./components/UpdateDialog";
 import { DownloadView } from "./views/DownloadView";
 import { HistoryView } from "./views/HistoryView";
+import { SettingsView } from "./views/SettingsView";
 import { ToolsView } from "./views/ToolsView";
 import {
   applicationVersion,
@@ -23,6 +24,11 @@ import {
 } from "./lib/desktop";
 import { parseDownloadDeepLink } from "./lib/deepLink";
 import { historyEntryToPrefill } from "./lib/history";
+import {
+  applyUiPreferences,
+  saveUiPreferences,
+  type UiPreferences,
+} from "./lib/uiPreferences";
 import type {
   AppStatus,
   AvailableAppUpdate,
@@ -30,8 +36,12 @@ import type {
   DownloadPrefill,
 } from "./types";
 
-type ViewName = "download" | "tools" | "history";
+type ViewName = "download" | "tools" | "history" | "settings";
 type Toast = { id: number; tone: "success" | "error" | "info"; message: string };
+
+interface AppProps {
+  initialUiPreferences: UiPreferences;
+}
 
 const EMPTY_STATUS: AppStatus = {
   tools: {
@@ -43,8 +53,9 @@ const EMPTY_STATUS: AppStatus = {
   activeJobId: null,
 };
 
-export default function App() {
+export default function App({ initialUiPreferences }: AppProps) {
   const [view, setView] = useState<ViewName>("download");
+  const [uiPreferences, setUiPreferences] = useState(initialUiPreferences);
   const [status, setStatus] = useState<AppStatus>(EMPTY_STATUS);
   const [loading, setLoading] = useState(true);
   const [prefill, setPrefill] = useState<DownloadPrefill | null>(null);
@@ -144,11 +155,20 @@ export default function App() {
     [notify],
   );
 
+  const updateUiPreferences = useCallback((preferences: UiPreferences) => {
+    setUiPreferences(preferences);
+    applyUiPreferences(preferences);
+    if (!saveUiPreferences(preferences)) {
+      notify("外觀已套用，但目前無法將設定保存在這台裝置。", "error");
+    }
+  }, [notify]);
+
   const navItems = useMemo(
     () => [
       { id: "download" as const, label: "下載片段", icon: Download },
       { id: "tools" as const, label: "工具管理", icon: Wrench },
       { id: "history" as const, label: "下載紀錄", icon: History },
+      { id: "settings" as const, label: "介面設定", icon: Settings2 },
     ],
     [],
   );
@@ -251,6 +271,12 @@ export default function App() {
               onReuse={reuseHistoryEntry}
               onStartDownload={() => setView("download")}
               notify={notify}
+            />
+          )}
+          {view === "settings" && (
+            <SettingsView
+              preferences={uiPreferences}
+              onChange={updateUiPreferences}
             />
           )}
         </div>
