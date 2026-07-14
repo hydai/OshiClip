@@ -85,29 +85,20 @@ summary:focus-visible {
 }
 
 .brand-mark {
-  position: relative;
   width: 38px;
   height: 38px;
   overflow: hidden;
-  border: 1px solid rgb(255 255 255 / 13%);
   border-radius: 12px;
-  background: #151f38;
-  box-shadow: inset 0 0 20px rgb(142 232 197 / 6%);
+  filter: drop-shadow(0 7px 12px rgb(5 14 32 / 28%));
+  flex: 0 0 auto;
 }
 
-.brand-mark span {
-  position: absolute;
-  width: 7px;
-  height: 24px;
-  bottom: 7px;
-  border-radius: 6px;
-  background: var(--mint);
-  transform: rotate(28deg);
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
-
-.brand-mark span:nth-child(1) { left: 8px; height: 17px; }
-.brand-mark span:nth-child(2) { left: 16px; height: 25px; background: var(--violet); }
-.brand-mark span:nth-child(3) { left: 25px; height: 14px; background: var(--coral); }
 
 .brand-block > div:last-child {
   display: grid;

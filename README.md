@@ -1,6 +1,10 @@
-# OshiClip
+<p align="center">
+  <img src="./public/oshiclip-logo.png" width="144" alt="OshiClip logo" />
+</p>
 
-> Clip the moment. Keep your oshi.
+<h1 align="center">OshiClip</h1>
+
+<p align="center"><em>Clip the moment. Keep your oshi.</em></p>
 
 以 Tauri v2、React 與 Rust 製作的跨平台直播片段下載工具。使用者可透過圖形介面輸入 YouTube 網址與起訖時間；應用程式會自行管理、驗證並執行 yt-dlp、ffmpeg 與 Deno，不需操作終端機。
 

@@ -94,10 +94,8 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand-block" aria-label="OshiClip">
-          <div className="brand-mark">
-            <span />
-            <span />
-            <span />
+          <div className="brand-mark" aria-hidden="true">
+            <img src="/oshiclip-logo.png" alt="" />
           </div>
           <div>
             <strong>OSHI</strong>
