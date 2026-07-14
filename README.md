@@ -42,11 +42,11 @@ Windows release 使用 `x86_64-pc-windows-msvc`，並透過 [`.cargo/config.toml
 
 ```powershell
 npm ci
-npm run tauri -- build --bundles nsis,msi
+npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis,msi
 npm run verify:windows
 ```
 
-驗證腳本會拒絕動態 MSVC/UCRT、非系統 DLL、錯誤架構，以及缺少 NSIS 或 MSI 的 build。公開發佈前仍需加入可信任的 Authenticode 憑證，否則 Windows SmartScreen 會顯示未知發行者警告。
+Windows build 必須明確指定 target，確保 Cargo 套用 `x86_64-pc-windows-msvc` 的 `+crt-static` 設定。驗證腳本會拒絕動態 MSVC/UCRT、非系統 DLL、錯誤架構，以及缺少 NSIS 或 MSI 的 build。公開發佈前仍需加入可信任的 Authenticode 憑證，否則 Windows SmartScreen 會顯示未知發行者警告。
 
 ## CI 與發布
 

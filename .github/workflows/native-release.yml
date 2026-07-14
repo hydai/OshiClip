@@ -119,7 +119,7 @@ jobs:
           cp "$dmg" "release-assets/OshiClip_${version}_macos-arm64.dmg"
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: oshiclip-macos-arm64
           if-no-files-found: error
@@ -161,7 +161,10 @@ jobs:
         run: npm ci
 
       - name: Build NSIS and MSI installers
-        run: npm run tauri -- build --bundles nsis,msi
+        run: >-
+          npm run tauri -- build
+          --target x86_64-pc-windows-msvc
+          --bundles nsis,msi
 
       - name: Verify PE imports and installers
         run: npm run verify:windows
@@ -169,8 +172,9 @@ jobs:
       - name: Stage Windows release assets
         run: |
           $version = node -p "require('./package.json').version"
-          $nsis = @(Get-ChildItem src-tauri/target/release/bundle/nsis -File -Filter '*-setup.exe')
-          $msi = @(Get-ChildItem src-tauri/target/release/bundle/msi -File -Filter '*.msi')
+          $bundleRoot = 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle'
+          $nsis = @(Get-ChildItem "$bundleRoot/nsis" -File -Filter '*-setup.exe')
+          $msi = @(Get-ChildItem "$bundleRoot/msi" -File -Filter '*.msi')
           if ($nsis.Count -ne 1) { throw "Expected one NSIS installer, found $($nsis.Count)." }
           if ($msi.Count -ne 1) { throw "Expected one MSI installer, found $($msi.Count)." }
           New-Item -ItemType Directory -Force release-assets | Out-Null
@@ -178,7 +182,7 @@ jobs:
           Copy-Item -LiteralPath $msi[0].FullName -Destination "release-assets/OshiClip_${version}_windows-x64.msi"
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: oshiclip-windows-x64
           if-no-files-found: error
@@ -198,13 +202,13 @@ jobs:
 
     steps:
       - name: Download macOS artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: oshiclip-macos-arm64
           path: release-assets
 
       - name: Download Windows artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: oshiclip-windows-x64
           path: release-assets
