@@ -1,0 +1,241 @@
+name: Native build and release
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Quality checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify application version
+        run: npm run check:version
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Build and test
+        run: npm run check
+
+      - name: Run strict Rust lint
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+
+  build-macos:
+    name: Build macOS arm64
+    needs: quality
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: macos-arm64
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build arm64 app and DMG
+        run: npm run tauri -- build --target aarch64-apple-darwin --bundles app,dmg
+
+      - name: Verify macOS bundle
+        env:
+          REQUIRE_MACOS_ARCH: arm64
+        run: >-
+          bash scripts/verify-macos-bundle.sh
+          src-tauri/target/aarch64-apple-darwin/release/bundle/macos/OshiClip.app
+
+      - name: Stage macOS release asset
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          dmg="$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          test -n "$dmg"
+          mkdir -p release-assets
+          cp "$dmg" "release-assets/OshiClip_${version}_macos-arm64.dmg"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oshiclip-macos-arm64
+          if-no-files-found: error
+          retention-days: 14
+          path: release-assets/*
+
+  build-windows:
+    name: Build Windows x64
+    needs: quality
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: windows-x64
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build NSIS and MSI installers
+        run: npm run tauri -- build --bundles nsis,msi
+
+      - name: Verify PE imports and installers
+        run: npm run verify:windows
+
+      - name: Stage Windows release assets
+        run: |
+          $version = node -p "require('./package.json').version"
+          $nsis = @(Get-ChildItem src-tauri/target/release/bundle/nsis -File -Filter '*-setup.exe')
+          $msi = @(Get-ChildItem src-tauri/target/release/bundle/msi -File -Filter '*.msi')
+          if ($nsis.Count -ne 1) { throw "Expected one NSIS installer, found $($nsis.Count)." }
+          if ($msi.Count -ne 1) { throw "Expected one MSI installer, found $($msi.Count)." }
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          Copy-Item -LiteralPath $nsis[0].FullName -Destination "release-assets/OshiClip_${version}_windows-x64-setup.exe"
+          Copy-Item -LiteralPath $msi[0].FullName -Destination "release-assets/OshiClip_${version}_windows-x64.msi"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oshiclip-windows-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: release-assets/*
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-macos
+      - build-windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: oshiclip-macos-arm64
+          path: release-assets
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: oshiclip-windows-x64
+          path: release-assets
+
+      - name: Generate SHA-256 manifest
+        shell: bash
+        run: |
+          cd release-assets
+          manifest="$(mktemp)"
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            | sed 's#  \./#  #' \
+            > "$manifest"
+          test "$(wc -l < "$manifest")" -eq 3
+          mv "$manifest" SHA256SUMS.txt
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mapfile -d '' assets < <(find release-assets -maxdepth 1 -type f -print0 | sort -z)
+          test "${#assets[@]}" -eq 4
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --title "OshiClip $GITHUB_REF_NAME"
+          fi

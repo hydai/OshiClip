@@ -46,7 +46,26 @@ npm run tauri -- build --bundles nsis,msi
 npm run verify:windows
 ```
 
-驗證腳本會拒絕動態 MSVC/UCRT、非系統 DLL、錯誤架構，以及缺少 NSIS 或 MSI 的 build。GitHub Actions 也提供 [Windows native build](./.github/workflows/windows-native.yml)，可手動觸發或在 `v*` tag 建立時產出兩種 unsigned 測試安裝器。公開發佈前仍需加入可信任的 Authenticode 憑證，否則 Windows SmartScreen 會顯示未知發行者警告。
+驗證腳本會拒絕動態 MSVC/UCRT、非系統 DLL、錯誤架構，以及缺少 NSIS 或 MSI 的 build。公開發佈前仍需加入可信任的 Authenticode 憑證，否則 Windows SmartScreen 會顯示未知發行者警告。
+
+## CI 與發布
+
+[`Native build and release`](./.github/workflows/native-release.yml) 會在 pull request、`main` push 與手動觸發時執行完整檢查，並產生下列可保留 14 天的 Actions artifacts：
+
+- macOS arm64 DMG（僅支援 Apple Silicon）
+- Windows x64 NSIS installer
+- Windows x64 MSI installer
+
+推送符合目前應用程式版本的 `vX.Y.Z` tag 後，workflow 會建立或更新 GitHub Release，附上三個安裝檔與 `SHA256SUMS.txt`：
+
+```bash
+npm run check:version
+version="$(node -p "require('./package.json').version")"
+git tag "v$version"
+git push origin "v$version"
+```
+
+`package.json`、`src-tauri/tauri.conf.json` 與 `src-tauri/Cargo.toml` 的版本必須一致，tag 也必須是相同版本加上 `v` 前綴。現階段 macOS 使用 ad-hoc 簽章但尚未 notarize，Windows installer 也尚未 Authenticode 簽署；CI 產物適合測試與早期開源發布，正式面向一般使用者前仍應配置平台憑證。
 
 完整產品與安全設計請見 [`oshiclip-desktop-design.md`](./oshiclip-desktop-design.md)；目前界面的功能、佈局、狀態與 UX 討論題請見 [`UI-spec.md`](./UI-spec.md)。
 

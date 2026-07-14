@@ -13,6 +13,7 @@
     "test:frontend": "vitest run",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "check": "npm run build && npm test",
+    "check:version": "node scripts/check-release-version.mjs",
     "verify:macos": "bash scripts/verify-macos-bundle.sh",
     "verify:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-windows-bundle.ps1"
   },

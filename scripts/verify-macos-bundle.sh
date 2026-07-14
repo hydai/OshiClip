@@ -24,6 +24,14 @@ if [[ -n "$unexpected_dependencies" ]]; then
   exit 1
 fi
 
+if [[ -n "${REQUIRE_MACOS_ARCH:-}" ]]; then
+  architectures="$(lipo -archs "$binary_path")"
+  if [[ "$architectures" != "$REQUIRE_MACOS_ARCH" ]]; then
+    echo "Expected macOS architecture $REQUIRE_MACOS_ARCH, found: $architectures" >&2
+    exit 1
+  fi
+fi
+
 if grep -Eq '^name = "(lzma-sys|xz2)"$' "$repo_root/src-tauri/Cargo.lock"; then
   echo "Cargo.lock still contains the native liblzma dependency chain." >&2
   exit 1
