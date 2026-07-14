@@ -110,12 +110,19 @@ if ($nsisInstallers.Count -eq 0 -or $msiInstallers.Count -eq 0) {
     throw "Expected both NSIS and MSI installers under $BundleRoot"
 }
 
-$signature = Get-AuthenticodeSignature -FilePath $BinaryPath
-if ($env:REQUIRE_WINDOWS_SIGNATURE -eq "1" -and $signature.Status -ne "Valid") {
-    throw "Authenticode signature is required but status is $($signature.Status)."
+if ($env:REQUIRE_WINDOWS_SIGNATURE -eq "1") {
+    try {
+        $signature = Get-AuthenticodeSignature -FilePath $BinaryPath
+    }
+    catch {
+        throw "Authenticode signature is required but could not be inspected: $($_.Exception.Message)"
+    }
+    if ($signature.Status -ne "Valid") {
+        throw "Authenticode signature is required but status is $($signature.Status)."
+    }
 }
-if ($signature.Status -ne "Valid") {
-    Write-Warning "Authenticode status is $($signature.Status); use a trusted certificate before public distribution."
+else {
+    Write-Warning "Authenticode verification is disabled; require a trusted signature before public distribution."
 }
 
 Write-Host "Verified x64 PE architecture and static MSVC CRT."
