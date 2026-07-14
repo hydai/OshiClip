@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { DownloadView } from "./views/DownloadView";
+import { HistoryView } from "./views/HistoryView";
 import { ToolsView } from "./views/ToolsView";
 import {
   applicationVersion,
@@ -21,9 +22,11 @@ import {
   subscribeToDeepLinks,
 } from "./lib/desktop";
 import { parseDownloadDeepLink } from "./lib/deepLink";
+import { historyEntryToPrefill } from "./lib/history";
 import type {
   AppStatus,
   AvailableAppUpdate,
+  DownloadHistoryEntry,
   DownloadPrefill,
 } from "./types";
 
@@ -131,11 +134,21 @@ export default function App() {
     }
     setAvailableAppUpdate(null);
   }, [availableAppUpdate]);
+
+  const reuseHistoryEntry = useCallback(
+    (entry: DownloadHistoryEntry) => {
+      setPrefill(historyEntryToPrefill(entry));
+      setView("download");
+      notify("已帶入這筆紀錄的來源與時間區間，確認檔名後即可開始。", "success");
+    },
+    [notify],
+  );
+
   const navItems = useMemo(
     () => [
       { id: "download" as const, label: "下載片段", icon: Download },
       { id: "tools" as const, label: "工具管理", icon: Wrench },
-      { id: "history" as const, label: "下載紀錄", icon: History, disabled: true },
+      { id: "history" as const, label: "下載紀錄", icon: History },
     ],
     [],
   );
@@ -162,12 +175,10 @@ export default function App() {
                 key={item.id}
                 type="button"
                 className={view === item.id ? "nav-item active" : "nav-item"}
-                onClick={() => !item.disabled && setView(item.id)}
-                disabled={item.disabled}
+                onClick={() => setView(item.id)}
               >
                 <Icon size={18} strokeWidth={1.8} />
                 <span>{item.label}</span>
-                {item.disabled && <small>即將推出</small>}
               </button>
             );
           })}
@@ -234,6 +245,13 @@ export default function App() {
           )}
           {view === "tools" && (
             <ToolsView status={status} refreshStatus={refreshStatus} notify={notify} />
+          )}
+          {view === "history" && (
+            <HistoryView
+              onReuse={reuseHistoryEntry}
+              onStartDownload={() => setView("download")}
+              notify={notify}
+            />
           )}
         </div>
       </main>

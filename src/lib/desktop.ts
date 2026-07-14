@@ -7,6 +7,7 @@ import type {
   AvailableRelease,
   DesktopEventMap,
   DesktopEventName,
+  DownloadHistoryEntry,
   DownloadJob,
   DownloadSpec,
   InstalledVersion,
@@ -77,6 +78,32 @@ let browserStatus: AppStatus = {
 
 const browserEvents = new EventTarget();
 let simulationTimer: number | null = null;
+let browserHistory: DownloadHistoryEntry[] = [
+  {
+    id: "preview-history-1",
+    url: "https://www.youtube.com/watch?v=mLSIBfQWqB4",
+    startSeconds: 4799,
+    endSeconds: 4993,
+    outputName: "nagi-favorite-clip",
+    outputPath: "~/Downloads/OshiClip/nagi-favorite-clip.mp4",
+    formatPreset: "avc1_mp4a",
+    completedAt: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
+    sizeBytes: 86_507_328,
+    fileExists: true,
+  },
+  {
+    id: "preview-history-2",
+    url: "https://youtu.be/dQw4w9WgXcQ",
+    startSeconds: 42,
+    endSeconds: 132,
+    outputName: "favorite-moment",
+    outputPath: "~/Downloads/OshiClip/favorite-moment.mp4",
+    formatPreset: "best",
+    completedAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
+    sizeBytes: 41_943_040,
+    fileExists: false,
+  },
+];
 
 function emitBrowserEvent<Name extends DesktopEventName>(
   name: Name,
@@ -293,6 +320,21 @@ export async function startDownload(spec: DownloadSpec): Promise<DownloadJob> {
       if (simulationTimer !== null) window.clearInterval(simulationTimer);
       simulationTimer = null;
       browserStatus.activeJobId = null;
+      browserHistory = [
+        {
+          id: jobId,
+          url: spec.url,
+          startSeconds: spec.startSeconds,
+          endSeconds: spec.endSeconds,
+          outputName: spec.outputName,
+          outputPath,
+          formatPreset: spec.formatPreset,
+          completedAt: new Date().toISOString(),
+          sizeBytes: 64 * 1024 * 1024,
+          fileExists: true,
+        },
+        ...browserHistory,
+      ];
       emitBrowserEvent("download-done", { jobId, outputPath });
     }
   }, 380);
@@ -316,6 +358,38 @@ export async function cancelDownload(jobId: string) {
 
 export async function revealOutput(path: string) {
   if (isDesktopRuntime) await invoke("reveal_output", { path });
+}
+
+export async function getDownloadHistory(): Promise<DownloadHistoryEntry[]> {
+  if (isDesktopRuntime) {
+    return invoke<DownloadHistoryEntry[]>("list_download_history");
+  }
+  return structuredClone(browserHistory);
+}
+
+export async function removeDownloadHistory(id: string): Promise<void> {
+  if (isDesktopRuntime) {
+    await invoke("remove_download_history", { id });
+    return;
+  }
+  browserHistory = browserHistory.filter((entry) => entry.id !== id);
+}
+
+export async function clearDownloadHistory(): Promise<void> {
+  if (isDesktopRuntime) {
+    await invoke("clear_download_history");
+    return;
+  }
+  browserHistory = [];
+}
+
+export async function revealHistoryOutput(id: string): Promise<void> {
+  if (isDesktopRuntime) {
+    await invoke("reveal_history_output", { id });
+    return;
+  }
+  const entry = browserHistory.find((item) => item.id === id);
+  if (!entry?.fileExists) throw new Error("下載檔案已被移動或刪除");
 }
 
 export async function onDesktopEvent<Name extends DesktopEventName>(

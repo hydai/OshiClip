@@ -210,7 +210,7 @@ pub struct DownloadSpec {
     pub format_preset: FormatPreset,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FormatPreset {
     Avc1Mp4a,
@@ -222,6 +222,51 @@ pub enum FormatPreset {
 pub struct DownloadJob {
     pub job_id: String,
     pub output_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadHistoryEntry {
+    pub id: String,
+    pub url: String,
+    pub start_seconds: u64,
+    pub end_seconds: u64,
+    pub output_name: String,
+    pub output_path: String,
+    pub format_preset: FormatPreset,
+    pub completed_at: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiDownloadHistoryEntry {
+    pub id: String,
+    pub url: String,
+    pub start_seconds: u64,
+    pub end_seconds: u64,
+    pub output_name: String,
+    pub output_path: String,
+    pub format_preset: FormatPreset,
+    pub completed_at: String,
+    pub size_bytes: u64,
+    pub file_exists: bool,
+}
+
+impl From<&DownloadHistoryEntry> for ApiDownloadHistoryEntry {
+    fn from(value: &DownloadHistoryEntry) -> Self {
+        Self {
+            id: value.id.clone(),
+            url: value.url.clone(),
+            start_seconds: value.start_seconds,
+            end_seconds: value.end_seconds,
+            output_name: value.output_name.clone(),
+            output_path: value.output_path.clone(),
+            format_preset: value.format_preset,
+            completed_at: value.completed_at.clone(),
+            size_bytes: value.size_bytes,
+            file_exists: std::path::Path::new(&value.output_path).is_file(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

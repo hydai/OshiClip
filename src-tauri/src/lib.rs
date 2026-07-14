@@ -2,6 +2,7 @@ mod binary_manager;
 mod command_builder;
 mod error;
 mod executor;
+mod history;
 mod manifest;
 mod models;
 
@@ -21,6 +22,7 @@ pub(crate) struct ActiveDownload {
 pub(crate) struct AppState {
     pub app_data: PathBuf,
     pub active_download: Mutex<Option<ActiveDownload>>,
+    pub history_lock: Mutex<()>,
     pub install_lock: tokio::sync::Mutex<()>,
 }
 
@@ -29,6 +31,7 @@ impl AppState {
         Self {
             app_data,
             active_download: Mutex::new(None),
+            history_lock: Mutex::new(()),
             install_lock: tokio::sync::Mutex::new(()),
         }
     }
@@ -76,6 +79,10 @@ pub fn run() {
             executor::start_download,
             executor::cancel_download,
             executor::reveal_output,
+            history::list_download_history,
+            history::remove_download_history,
+            history::clear_download_history,
+            history::reveal_history_output,
             binary_manager::list_available_versions,
             binary_manager::install_tool,
             binary_manager::switch_tool_version,

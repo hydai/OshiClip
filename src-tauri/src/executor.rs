@@ -1,6 +1,7 @@
 use crate::{
     command_builder::build_download_args,
     error::{AppError, AppResult},
+    history::record_completed_download,
     manifest::ManifestStore,
     models::{AppStatus, DownloadJob, DownloadSpec, Tool},
     ActiveDownload, AppState,
@@ -132,8 +133,16 @@ pub async fn start_download(
     let app_for_task = app.clone();
     let job_for_task = job_id.clone();
     let output_for_task = output_path.clone();
+    let spec_for_task = spec.clone();
     tauri::async_runtime::spawn(async move {
-        monitor_download(app_for_task, job_for_task, output_for_task, receiver).await;
+        monitor_download(
+            app_for_task,
+            job_for_task,
+            spec_for_task,
+            output_for_task,
+            receiver,
+        )
+        .await;
     });
 
     Ok(DownloadJob {
@@ -179,6 +188,7 @@ pub fn reveal_output(app: AppHandle, state: State<'_, AppState>, path: String) -
 async fn monitor_download(
     app: AppHandle,
     job_id: String,
+    spec: DownloadSpec,
     expected_output: String,
     mut receiver: tokio::sync::mpsc::Receiver<CommandEvent>,
 ) {
@@ -239,6 +249,19 @@ async fn monitor_download(
                         },
                     );
                 } else if payload.code == Some(0) {
+                    if let Err(error) =
+                        record_completed_download(&app, &job_id, &spec, &final_output)
+                    {
+                        let warning = format!("無法保存下載紀錄：{error}");
+                        let _ = app.emit(
+                            "download-log",
+                            LogEvent {
+                                job_id: &job_id,
+                                line: &warning,
+                                stream: "stderr",
+                            },
+                        );
+                    }
                     let _ = app.emit(
                         "download-done",
                         DoneEvent {

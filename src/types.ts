@@ -73,6 +73,19 @@ export interface DownloadJob {
   outputPath: string;
 }
 
+export interface DownloadHistoryEntry {
+  id: string;
+  url: string;
+  startSeconds: number;
+  endSeconds: number;
+  outputName: string;
+  outputPath: string;
+  formatPreset: FormatPreset;
+  completedAt: string;
+  sizeBytes: number;
+  fileExists: boolean;
+}
+
 export interface DownloadProgressEvent {
   jobId: string;
   percent: number;
