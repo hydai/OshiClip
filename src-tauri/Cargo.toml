@@ -1,13 +1,14 @@
 [package]
-name = "vods-oshi"
+name = "oshiclip"
 version = "0.1.2"
 description = "Download and remux precise YouTube livestream clips without a terminal"
-authors = ["VODS Oshi contributors"]
+authors = ["OshiClip contributors"]
+license = "Apache-2.0"
 edition = "2021"
 rust-version = "1.85"
 
 [lib]
-name = "vods_oshi_lib"
+name = "oshiclip_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

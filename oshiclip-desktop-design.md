@@ -1,4 +1,4 @@
-# vods.oshi.tw Desktop — 技術設計文件
+# OshiClip Desktop — 技術設計文件
 
 | 項目 | 內容 |
 |---|---|
@@ -265,7 +265,7 @@ sequenceDiagram
     }
   },
   "settings": {
-    "output_directory": "/Users/example/Downloads/VODS Oshi"
+    "output_directory": "/Users/example/Downloads/OshiClip"
   }
 }
 ```
@@ -484,11 +484,14 @@ interface DownloadSpec {
 
 ### 10.1 深層連結（Deep Link）
 
-讓網頁「一鍵開啟 app 並帶入參數」，使用 Tauri v2 的 deep-link plugin 註冊自訂 URL scheme：
+讓網頁「一鍵開啟 app 並帶入參數」，使用 Tauri v2 的 deep-link plugin 註冊自訂 URL scheme。主要格式為：
 
 ```
-oshi-vods://download?v=mLSIBfQWqB4&start=4799&end=4993&name=nagi-4799-4993
+oshiclip://download?v=mLSIBfQWqB4&start=4799&end=4993&name=nagi-4799-4993
 ```
+
+為相容既有 `vods.oshi.tw`，app 仍接受同參數格式的
+`oshi-vods://download` legacy scheme。
 
 流程：
 
@@ -498,7 +501,7 @@ sequenceDiagram
     participant OS as 作業系統
     participant App as Desktop App
     W->>W: 使用者選好片段
-    W->>OS: 開啟 oshi-vods://download?...
+    W->>OS: 開啟 oshiclip://download?...
     OS->>App: 喚起 app 並傳入 URL
     App->>App: 解析 query → DownloadSpec
     App->>App: 自動填入表單（保留讓使用者確認）
@@ -551,13 +554,15 @@ sequenceDiagram
 ### 13.1 目錄結構
 
 ```
-vods-oshi-desktop/
+oshiclip/
 ├── src/                      # 前端 (React)
 │   ├── views/
 │   │   ├── DownloadView.tsx
 │   │   └── ToolsView.tsx
 │   ├── lib/
 │   │   ├── desktop.ts        # invoke / event 封裝 + 瀏覽器模擬
+│   │   ├── deepLink.ts       # 新舊 URL scheme 白名單解析
+│   │   ├── deepLink.test.ts
 │   │   ├── time.ts           # 時間 / 檔名處理
 │   │   └── time.test.ts
 │   ├── App.tsx
@@ -585,7 +590,7 @@ vods-oshi-desktop/
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"          # spawn 外部 binary
-tauri-plugin-deep-link = "2"      # 承接 oshi-vods:// 連結
+tauri-plugin-deep-link = "2"      # 承接 oshiclip:// 與 legacy 連結
 tauri-plugin-single-instance = "2" # 已開啟 app 接收 deep link
 tauri-plugin-dialog = "2"         # 輸出目錄選擇器
 tauri-plugin-opener = "2"         # 在檔案總管顯示成品
@@ -649,7 +654,7 @@ fn remove_tool_version(state: State<'_, AppState>, tool: Tool, version: String)
 | M3 — Execution Engine | argv spawn + 進度事件 + 取消 | 單一任務、進度、日誌與取消 | ✅ 完成 |
 | M4 — UX 打磨 | 表單驗證、錯誤面板、開啟資料夾、preset | 響應式下載與工具管理界面 | ✅ 完成 |
 | M5 — 簽章與發佈 | 三平台簽章 / notarization / 安裝包 | 可散布的正式版 | ⏳ 待處理 |
-| M6 — Deep Link | `oshi-vods://` 承接 + 網頁端偵測降級 | app 端註冊、單實例、白名單預填 | 🟡 app 端完成；網頁端待接 |
+| M6 — Deep Link | `oshiclip://` 承接 + legacy 相容 + 網頁端偵測降級 | app 端註冊、單實例、白名單預填 | 🟡 app 端完成；網頁端待接 |
 
 ---
 
@@ -669,7 +674,7 @@ fn remove_tool_version(state: State<'_, AppState>, tool: Tool, version: String)
 
 - 前端採 React + TypeScript + Vite。
 - 工具保持執行期下載，不內嵌於 app bundle。
-- `oshi-vods://` 只允許 `download` host，並白名單驗證 video ID、整數時間與檔名；連結只預填，不自動執行。
+- `oshiclip://` 與 legacy `oshi-vods://` 只允許 `download` host，並白名單驗證 video ID、整數時間與檔名；連結只預填，不自動執行。
 
 待決策：
 

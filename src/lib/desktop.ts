@@ -58,7 +58,7 @@ let browserStatus: AppStatus = {
     },
   },
   settings: {
-    outputDirectory: "~/Downloads/VODS Oshi",
+    outputDirectory: "~/Downloads/OshiClip",
   },
   activeJobId: null,
 };
@@ -163,7 +163,7 @@ export async function removeToolVersion(tool: ToolName, version: string) {
 }
 
 export async function chooseOutputDirectory(current: string): Promise<string | null> {
-  if (!isDesktopRuntime) return "~/Movies/VODS Oshi";
+  if (!isDesktopRuntime) return "~/Movies/OshiClip";
   const { open } = await import("@tauri-apps/plugin-dialog");
   const selected = await open({
     title: "選擇片段輸出資料夾",

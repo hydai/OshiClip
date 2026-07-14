@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "VODS Oshi",
+  "productName": "OshiClip",
   "version": "0.1.2",
-  "identifier": "tw.oshi.vods",
+  "identifier": "tw.oshi.oshiclip",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "VODS Oshi",
+        "title": "OshiClip",
         "width": 1180,
         "height": 780,
         "minWidth": 900,
@@ -32,6 +32,11 @@
     "active": true,
     "targets": "all",
     "category": "Utility",
+    "license": "Apache-2.0",
+    "licenseFile": "../LICENSE",
+    "resources": {
+      "../LICENSE": "LICENSE"
+    },
     "macOS": {
       "signingIdentity": "-"
     },
@@ -46,7 +51,7 @@
         "installMode": "currentUser"
       },
       "wix": {
-        "upgradeCode": "2b1308bd-5b6f-5d63-a252-d1bfb89532b4"
+        "upgradeCode": "64fe6a3d-1e86-5fd2-99a2-021b124199de"
       }
     },
     "shortDescription": "精準下載 YouTube 直播片段",
@@ -55,7 +60,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["oshi-vods"]
+        "schemes": ["oshiclip", "oshi-vods"]
       }
     }
   }

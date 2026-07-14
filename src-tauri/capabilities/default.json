@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
-  "description": "Minimal permissions for the VODS Oshi main window",
+  "description": "Minimal permissions for the OshiClip main window",
   "windows": ["main"],
   "permissions": [
     "core:default",

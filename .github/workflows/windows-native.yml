@@ -87,7 +87,7 @@ jobs:
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
-          name: vods-oshi-windows-x64-unsigned
+          name: oshiclip-windows-x64-unsigned
           if-no-files-found: error
           retention-days: 14
           path: |

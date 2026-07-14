@@ -61,7 +61,7 @@ pub fn run() {
                 .path()
                 .download_dir()
                 .unwrap_or_else(|_| app_data.clone())
-                .join("VODS Oshi");
+                .join("OshiClip");
             manifest::ManifestStore::new(app_data.clone())
                 .initialize(output_directory)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
@@ -80,5 +80,5 @@ pub fn run() {
             binary_manager::remove_tool_version,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running VODS Oshi");
+        .expect("error while running OshiClip");
 }

@@ -3,8 +3,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-app_path="${1:-$repo_root/src-tauri/target/release/bundle/macos/VODS Oshi.app}"
-binary_path="$app_path/Contents/MacOS/vods-oshi"
+app_path="${1:-$repo_root/src-tauri/target/release/bundle/macos/OshiClip.app}"
+binary_path="$app_path/Contents/MacOS/oshiclip"
 
 if [[ ! -f "$binary_path" ]]; then
   echo "macOS app binary not found: $binary_path" >&2

@@ -1,4 +1,4 @@
-# VODS Oshi Desktop — UI/UX 現況規格
+# OshiClip — UI/UX 現況規格
 
 | 項目 | 內容 |
 |---|---|
@@ -17,7 +17,7 @@
 
 ### 1.1 產品目的
 
-VODS Oshi 是一個不需要操作終端機的 YouTube 直播片段下載工具。使用者貼上影片網址、輸入起訖時間與檔名後，應用程式在本機呼叫受管的 yt-dlp、ffmpeg 與 Deno，下載指定區間並輸出 MP4。
+OshiClip 是一個不需要操作終端機的 YouTube 直播片段下載工具。使用者貼上影片網址、輸入起訖時間與檔名後，應用程式在本機呼叫受管的 yt-dlp、ffmpeg 與 Deno，下載指定區間並輸出 MP4。
 
 ### 1.2 核心使用者
 
@@ -73,7 +73,7 @@ flowchart LR
     Download -->|完成：顯示檔案位置| Explorer[系統檔案總管]
     Tools --> ToolCards[yt-dlp / ffmpeg / Deno]
     Tools --> Output[輸出資料夾]
-    DeepLink[oshi-vods://download] -->|只預填，不自動下載| Download
+    DeepLink[oshiclip://download] -->|只預填，不自動下載| Download
 ```
 
 ---
@@ -97,7 +97,7 @@ flowchart LR
 ┌──────────────────────┬─────────────────────────────────────────────────────┐
 │ Sidebar 224 px       │ Topbar 54 px                                        │
 │                      │ Desktop App                    [下載工具已就緒]      │
-│ VODS OSHI            ├─────────────────────────────────────────────────────┤
+│ OSHI CLIP            ├─────────────────────────────────────────────────────┤
 │                      │                                                     │
 │ 工作區               │ Scrollable view container                           │
 │ ● 下載片段           │                                                     │
@@ -106,7 +106,7 @@ flowchart LR
 │                      │   View-specific content                             │
 │                      │                                                     │
 │ ┌ 輸出位置 ───────┐ │                                                     │
-│ │ VODS Oshi     ⚙ │ │                                                     │
+│ │ OshiClip      ⚙ │ │                                                     │
 │ └─────────────────┘ │                                                     │
 │ 本機模式 v0.1.2     │                                      Toast stack →  │
 └──────────────────────┴─────────────────────────────────────────────────────┘
@@ -131,7 +131,7 @@ flowchart LR
 
 由上至下包含：
 
-1. 品牌區：自製三色聲波圖形與「VODS OSHI」字樣。
+1. 品牌區：自製三色聲波圖形與「OSHI CLIP」字樣。
 2. 「工作區」分類標題。
 3. 三個主導覽按鈕。
 4. 可伸展空白區。
@@ -197,7 +197,7 @@ flowchart LR
 ┌───────────────────────────────────────────────────────────────────────────┐
 │ CLIP DOWNLOADER                                      [播放／聲波裝飾]     │
 │ 剪下你想收藏的那一段。                                                   │
-│ 貼上直播網址、選好時間，剩下的交給 VODS Oshi。                           │
+│ 貼上直播網址、選好時間，剩下的交給 OshiClip。                            │
 ├───────────────────────────────────────────────────────────────────────────┤
 │ [只有工具未就緒時出現：第一次使用設定 Banner]                            │
 ├──────────────────────────────────────┬────────────────────────────────────┤
@@ -232,7 +232,7 @@ flowchart LR
 |---|---|
 | Eyebrow | 剪刀 icon +「CLIP DOWNLOADER」 |
 | H1 | 剪下你想收藏的那一段。 |
-| 說明 | 貼上直播網址、選好時間，剩下的交給 VODS Oshi。 |
+| 說明 | 貼上直播網址、選好時間，剩下的交給 OshiClip。 |
 | 裝飾 | Mint 播放圓、紫／珊瑚／綠聲波與虛線；不具互動 |
 
 ### 5.4 首次設定 Banner
@@ -263,7 +263,7 @@ CTA 只切換至工具管理頁，不會直接開始安裝。
 自動檔名格式：
 
 ```text
-oshi-{videoId}-{startSeconds}-{endSeconds}
+oshiclip-{videoId}-{startSeconds}-{endSeconds}
 ```
 
 檔名正規化規則：
@@ -533,7 +533,7 @@ UI 安裝階段：
 - Label：「片段輸出資料夾」
 - 主值：完整絕對路徑；沒有值時顯示「尚未設定」
 - 說明：「完成後可直接從任務狀態開啟所在位置」
-- 首次啟動的預設值為系統 Downloads 目錄下的 `VODS Oshi`。
+- 首次啟動的預設值為系統 Downloads 目錄下的 `OshiClip`。
 
 點擊後開啟系統原生 directory picker。使用者取消不產生通知；成功則刷新狀態並顯示 success toast。
 
@@ -587,11 +587,14 @@ stateDiagram-v2
 
 ### 8.3 Deep Link
 
-支援格式：
+主要格式：
 
 ```text
-oshi-vods://download?v={videoId}&start={seconds}&end={seconds}&name={outputName}
+oshiclip://download?v={videoId}&start={seconds}&end={seconds}&name={outputName}
 ```
+
+為相容既有 `vods.oshi.tw` 整合，仍接受相同參數格式的
+`oshi-vods://download` legacy scheme。
 
 現況：
 

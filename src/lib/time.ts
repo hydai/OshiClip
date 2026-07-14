@@ -55,7 +55,7 @@ export function buildDefaultOutputName(
   endSeconds: number,
 ): string {
   const videoId = extractVideoId(url) ?? "clip";
-  return `oshi-${videoId}-${startSeconds}-${endSeconds}`;
+  return `oshiclip-${videoId}-${startSeconds}-${endSeconds}`;
 }
 
 export function sanitizeOutputName(value: string): string {

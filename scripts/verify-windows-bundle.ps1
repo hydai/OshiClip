@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 if ([string]::IsNullOrWhiteSpace($BinaryPath)) {
-    $BinaryPath = Join-Path $repoRoot "src-tauri\target\release\vods-oshi.exe"
+    $BinaryPath = Join-Path $repoRoot "src-tauri\target\release\oshiclip.exe"
 }
 if ([string]::IsNullOrWhiteSpace($BundleRoot)) {
     $BundleRoot = Join-Path $repoRoot "src-tauri\target\release\bundle"

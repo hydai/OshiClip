@@ -33,14 +33,7 @@ import {
   parseTimecode,
   sanitizeOutputName,
 } from "../lib/time";
-import type { AppStatus, DownloadSpec, FormatPreset } from "../types";
-
-export interface DownloadPrefill {
-  url: string;
-  startSeconds: number;
-  endSeconds: number;
-  outputName?: string;
-}
+import type { AppStatus, DownloadPrefill, DownloadSpec, FormatPreset } from "../types";
 
 type DownloadState = "idle" | "starting" | "running" | "completed" | "error";
 
@@ -224,7 +217,7 @@ export function DownloadView({
         <div>
           <p className="eyebrow"><Scissors size={14} /> CLIP DOWNLOADER</p>
           <h1>剪下你想收藏的那一段。</h1>
-          <p>貼上直播網址、選好時間，剩下的交給 VODS Oshi。</p>
+          <p>貼上直播網址、選好時間，剩下的交給 OshiClip。</p>
         </div>
         <div className="heading-ornament" aria-hidden="true">
           <div className="ornament-disc"><Play size={24} fill="currentColor" /></div>
@@ -321,7 +314,7 @@ export function DownloadView({
                   setOutputTouched(true);
                   setOutputName(event.target.value);
                 }}
-                placeholder="oshi-videoId-start-end"
+                placeholder="oshiclip-videoId-start-end"
                 maxLength={120}
               />
               <span className="extension">.mp4</span>

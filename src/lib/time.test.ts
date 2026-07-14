@@ -38,7 +38,7 @@ describe("YouTube and filename helpers", () => {
   it("builds and sanitizes output names", () => {
     expect(
       buildDefaultOutputName("https://youtu.be/mLSIBfQWqB4", 4799, 4993),
-    ).toBe("oshi-mLSIBfQWqB4-4799-4993");
+    ).toBe("oshiclip-mLSIBfQWqB4-4799-4993");
     expect(sanitizeOutputName('  Nagi: "favorite" / clip  ')).toBe(
       "Nagi- -favorite- - clip",
     );

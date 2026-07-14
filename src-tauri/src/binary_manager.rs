@@ -45,7 +45,7 @@ struct InstallProgress<'a> {
 
 fn github_client() -> AppResult<Client> {
     Ok(Client::builder()
-        .user_agent("vods-oshi-desktop/0.1")
+        .user_agent("oshiclip-desktop/0.1")
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(30 * 60))
         .redirect(reqwest::redirect::Policy::limited(8))

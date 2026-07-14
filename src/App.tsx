@@ -9,15 +9,15 @@ import {
   Sparkles,
   Wrench,
 } from "lucide-react";
-import { DownloadView, type DownloadPrefill } from "./views/DownloadView";
+import { DownloadView } from "./views/DownloadView";
 import { ToolsView } from "./views/ToolsView";
 import {
   getAppStatus,
   isDesktopRuntime,
   subscribeToDeepLinks,
 } from "./lib/desktop";
-import { sanitizeOutputName } from "./lib/time";
-import type { AppStatus } from "./types";
+import { parseDownloadDeepLink } from "./lib/deepLink";
+import type { AppStatus, DownloadPrefill } from "./types";
 
 type ViewName = "download" | "tools" | "history";
 type Toast = { id: number; tone: "success" | "error" | "info"; message: string };
@@ -31,29 +31,6 @@ const EMPTY_STATUS: AppStatus = {
   settings: { outputDirectory: "" },
   activeJobId: null,
 };
-
-function parseDeepLink(raw: string): DownloadPrefill | null {
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== "oshi-vods:" || url.hostname !== "download") return null;
-    const videoId = url.searchParams.get("v") ?? "";
-    const start = Number(url.searchParams.get("start"));
-    const end = Number(url.searchParams.get("end"));
-    const name = sanitizeOutputName(url.searchParams.get("name") ?? "");
-    if (!/^[\w-]{6,20}$/.test(videoId)) return null;
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) {
-      return null;
-    }
-    return {
-      url: `https://www.youtube.com/watch?v=${videoId}`,
-      startSeconds: start,
-      endSeconds: end,
-      outputName: name || undefined,
-    };
-  } catch {
-    return null;
-  }
-}
 
 export default function App() {
   const [view, setView] = useState<ViewName>("download");
@@ -87,9 +64,9 @@ export default function App() {
   useEffect(() => {
     let unlisten: () => void = () => {};
     void subscribeToDeepLinks((urls) => {
-      const next = urls.map(parseDeepLink).find(Boolean);
+      const next = urls.map(parseDownloadDeepLink).find(Boolean);
       if (!next) {
-        notify("無法讀取這個 VODS Oshi 連結，請確認參數是否完整。", "error");
+        notify("無法讀取這個 OshiClip 連結，請確認參數是否完整。", "error");
         return;
       }
       setPrefill(next);
@@ -116,15 +93,15 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand-block" aria-label="VODS Oshi">
+        <div className="brand-block" aria-label="OshiClip">
           <div className="brand-mark">
             <span />
             <span />
             <span />
           </div>
           <div>
-            <strong>VODS</strong>
-            <span>OSHI</span>
+            <strong>OSHI</strong>
+            <span>CLIP</span>
           </div>
         </div>
 

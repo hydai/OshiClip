@@ -41,6 +41,13 @@ export interface DownloadSpec {
   formatPreset: FormatPreset;
 }
 
+export interface DownloadPrefill {
+  url: string;
+  startSeconds: number;
+  endSeconds: number;
+  outputName?: string;
+}
+
 export interface DownloadJob {
   jobId: string;
   outputPath: string;
