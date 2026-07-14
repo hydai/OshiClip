@@ -400,7 +400,7 @@ async fn fetch_btbn_ffmpeg_releases(client: &Client) -> AppResult<Vec<AvailableR
             archive: true,
         });
     }
-    available.sort_by(|left, right| version_rank(&right.version).cmp(&version_rank(&left.version)));
+    available.sort_by_key(|release| std::cmp::Reverse(version_rank(&release.version)));
     Ok(available)
 }
 
