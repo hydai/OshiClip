@@ -1,6 +1,6 @@
 [package]
 name = "oshiclip"
-version = "0.1.2"
+version = "0.2.0"
 description = "Download and remux precise YouTube livestream clips without a terminal"
 authors = ["OshiClip contributors"]
 license = "Apache-2.0"
@@ -27,6 +27,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
 tauri-plugin-shell = "2"
 tempfile = "3"
 thiserror = "2"
@@ -40,6 +41,7 @@ tar = { version = "0.4", default-features = false }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-updater = "2"
 
 [dev-dependencies]
 lzma-rust2 = { version = "0.16.5", default-features = false, features = ["encoder", "std", "xz"] }

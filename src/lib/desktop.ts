@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import packageInfo from "../../package.json";
 import type {
   AppStatus,
+  AvailableAppUpdate,
   AvailableRelease,
   DesktopEventMap,
   DesktopEventName,
@@ -10,9 +12,19 @@ import type {
   InstalledVersion,
   ToolName,
 } from "../types";
+import {
+  INITIAL_APP_UPDATE_PROGRESS,
+  reduceAppUpdateProgress,
+} from "./appUpdate";
 
 export const isDesktopRuntime =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+export const applicationVersion = packageInfo.version;
+const isAppUpdatePreview =
+  import.meta.env.DEV &&
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).has("preview-update");
+export const canCheckForAppUpdate = isDesktopRuntime || isAppUpdatePreview;
 
 const now = new Date().toISOString();
 let browserStatus: AppStatus = {
@@ -80,6 +92,80 @@ function cloneStatus(): AppStatus {
 export async function getAppStatus(): Promise<AppStatus> {
   if (isDesktopRuntime) return invoke<AppStatus>("get_app_status");
   return cloneStatus();
+}
+
+export async function checkForAppUpdate(): Promise<AvailableAppUpdate | null> {
+  if (!isDesktopRuntime) {
+    if (!isAppUpdatePreview) return null;
+
+    return {
+      currentVersion: applicationVersion,
+      version: "0.3.0",
+      date: new Date().toISOString(),
+      body: "改善 GitHub Release 更新流程\n\n・加入下載進度與簽章驗證\n・安裝完成後自動重新啟動",
+      downloadAndInstall: async (onProgress) => {
+        let progress = reduceAppUpdateProgress(INITIAL_APP_UPDATE_PROGRESS, {
+          type: "started",
+          contentLength: 5 * 1024 * 1024,
+        });
+        onProgress(progress);
+        for (let index = 0; index < 5; index += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 240));
+          progress = reduceAppUpdateProgress(progress, {
+            type: "progress",
+            chunkLength: 1024 * 1024,
+          });
+          onProgress(progress);
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 320));
+        onProgress(
+          reduceAppUpdateProgress(progress, { type: "finished" }),
+        );
+      },
+      close: async () => undefined,
+    };
+  }
+
+  const { check } = await import("@tauri-apps/plugin-updater");
+  const update = await check({ timeout: 15_000 });
+  if (!update) return null;
+
+  return {
+    currentVersion: update.currentVersion,
+    version: update.version,
+    date: update.date ?? null,
+    body: update.body?.trim() || null,
+    downloadAndInstall: async (onProgress) => {
+      let progress = { ...INITIAL_APP_UPDATE_PROGRESS };
+      await update.downloadAndInstall((event) => {
+        switch (event.event) {
+          case "Started":
+            progress = reduceAppUpdateProgress(progress, {
+              type: "started",
+              contentLength: event.data.contentLength,
+            });
+            break;
+          case "Progress":
+            progress = reduceAppUpdateProgress(progress, {
+              type: "progress",
+              chunkLength: event.data.chunkLength,
+            });
+            break;
+          case "Finished":
+            progress = reduceAppUpdateProgress(progress, { type: "finished" });
+            break;
+        }
+        onProgress(progress);
+      });
+    },
+    close: () => update.close(),
+  };
+}
+
+export async function relaunchApplication(): Promise<void> {
+  if (!isDesktopRuntime) return;
+  const { relaunch } = await import("@tauri-apps/plugin-process");
+  await relaunch();
 }
 
 export async function listAvailableVersions(

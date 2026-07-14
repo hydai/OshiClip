@@ -33,6 +33,26 @@ export interface AvailableRelease {
   publishedAt: string | null;
 }
 
+export type AppUpdateStage = "downloading" | "installing";
+
+export interface AppUpdateProgress {
+  stage: AppUpdateStage;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+}
+
+export interface AvailableAppUpdate {
+  currentVersion: string;
+  version: string;
+  date: string | null;
+  body: string | null;
+  downloadAndInstall: (
+    onProgress: (progress: AppUpdateProgress) => void,
+  ) => Promise<void>;
+  close: () => Promise<void>;
+}
+
 export interface DownloadSpec {
   url: string;
   startSeconds: number;

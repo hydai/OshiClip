@@ -13,6 +13,7 @@ src-tauri/gen/schemas/
 *.log
 .env
 .env.local
+.tauri/
 .vinext/
 .wrangler/
 

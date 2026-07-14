@@ -1,23 +1,31 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
-  CircleHelp,
   Download,
   FolderDown,
   History,
+  RefreshCw,
   Settings2,
   Sparkles,
   Wrench,
 } from "lucide-react";
+import { UpdateDialog } from "./components/UpdateDialog";
 import { DownloadView } from "./views/DownloadView";
 import { ToolsView } from "./views/ToolsView";
 import {
+  applicationVersion,
+  canCheckForAppUpdate,
+  checkForAppUpdate,
   getAppStatus,
   isDesktopRuntime,
   subscribeToDeepLinks,
 } from "./lib/desktop";
 import { parseDownloadDeepLink } from "./lib/deepLink";
-import type { AppStatus, DownloadPrefill } from "./types";
+import type {
+  AppStatus,
+  AvailableAppUpdate,
+  DownloadPrefill,
+} from "./types";
 
 type ViewName = "download" | "tools" | "history";
 type Toast = { id: number; tone: "success" | "error" | "info"; message: string };
@@ -38,6 +46,11 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [prefill, setPrefill] = useState<DownloadPrefill | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [availableAppUpdate, setAvailableAppUpdate] =
+    useState<AvailableAppUpdate | null>(null);
+  const [checkingForUpdate, setCheckingForUpdate] = useState(false);
+  const updateCheckStarted = useRef(false);
+  const updateCheckInFlight = useRef(false);
 
   const notify = useCallback((message: string, tone: Toast["tone"] = "info") => {
     const id = Date.now() + Math.random();
@@ -61,6 +74,36 @@ export default function App() {
     void refreshStatus();
   }, [refreshStatus]);
 
+  const checkForUpdates = useCallback(
+    async (manual: boolean) => {
+      if (!canCheckForAppUpdate || updateCheckInFlight.current) return;
+      updateCheckInFlight.current = true;
+      setCheckingForUpdate(true);
+      try {
+        const update = await checkForAppUpdate();
+        if (update) {
+          setAvailableAppUpdate(update);
+        } else if (manual) {
+          notify(`目前已是最新版本（v${applicationVersion}）。`, "success");
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (manual) notify(`無法檢查更新：${message}`, "error");
+        else console.warn("Automatic update check failed", error);
+      } finally {
+        updateCheckInFlight.current = false;
+        setCheckingForUpdate(false);
+      }
+    },
+    [notify],
+  );
+
+  useEffect(() => {
+    if (updateCheckStarted.current || !canCheckForAppUpdate) return;
+    updateCheckStarted.current = true;
+    void checkForUpdates(false);
+  }, [checkForUpdates]);
+
   useEffect(() => {
     let unlisten: () => void = () => {};
     void subscribeToDeepLinks((urls) => {
@@ -81,6 +124,13 @@ export default function App() {
   const toolsReady = Boolean(
     status.tools["yt-dlp"].selected && status.tools.ffmpeg.selected && status.tools.deno.selected,
   );
+
+  const dismissAppUpdate = useCallback(() => {
+    if (availableAppUpdate) {
+      void availableAppUpdate.close().catch(console.warn);
+    }
+    setAvailableAppUpdate(null);
+  }, [availableAppUpdate]);
   const navItems = useMemo(
     () => [
       { id: "download" as const, label: "下載片段", icon: Download },
@@ -146,9 +196,17 @@ export default function App() {
           <span className="avatar">推</span>
           <div>
             <strong>本機模式</strong>
-            <span>v0.1.2</span>
+            <span>v{applicationVersion}</span>
           </div>
-          <CircleHelp size={17} />
+          <button
+            type="button"
+            aria-label="檢查 OshiClip 更新"
+            title={canCheckForAppUpdate ? "檢查更新" : "桌面版才支援自動更新"}
+            disabled={!canCheckForAppUpdate || checkingForUpdate}
+            onClick={() => void checkForUpdates(true)}
+          >
+            <RefreshCw className={checkingForUpdate ? "spin" : undefined} size={16} />
+          </button>
         </div>
       </aside>
 
@@ -179,6 +237,14 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {availableAppUpdate && (
+        <UpdateDialog
+          key={availableAppUpdate.version}
+          update={availableAppUpdate}
+          onDismiss={dismissAppUpdate}
+        />
+      )}
 
       <div className="toast-stack" role="status" aria-live="polite">
         {toasts.map((toast) => (

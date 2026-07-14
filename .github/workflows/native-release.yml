@@ -100,8 +100,30 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify updater signing secret
+        if: github.ref_type == 'tag'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY must be configured before publishing an auto-update release."
+            exit 1
+          fi
+
       - name: Build arm64 app and DMG
+        if: github.ref_type != 'tag'
         run: npm run tauri -- build --target aarch64-apple-darwin --bundles app,dmg
+
+      - name: Build signed arm64 app, DMG, and updater bundle
+        if: github.ref_type == 'tag'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: >-
+          npm run tauri -- build
+          --target aarch64-apple-darwin
+          --bundles app,dmg
+          --config src-tauri/tauri.release.conf.json
 
       - name: Verify macOS bundle
         env:
@@ -117,6 +139,13 @@ jobs:
           test -n "$dmg"
           mkdir -p release-assets
           cp "$dmg" "release-assets/OshiClip_${version}_macos-arm64.dmg"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            updater="$(find src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit)"
+            test -n "$updater"
+            test -f "$updater.sig"
+            cp "$updater" "release-assets/OshiClip_${version}_macos-arm64.app.tar.gz"
+            cp "$updater.sig" "release-assets/OshiClip_${version}_macos-arm64.app.tar.gz.sig"
+          fi
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v7
@@ -160,11 +189,32 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify updater signing secret
+        if: github.ref_type == 'tag'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw 'TAURI_SIGNING_PRIVATE_KEY must be configured before publishing an auto-update release.'
+          }
+
       - name: Build NSIS and MSI installers
+        if: github.ref_type != 'tag'
         run: >-
           npm run tauri -- build
           --target x86_64-pc-windows-msvc
           --bundles nsis,msi
+
+      - name: Build signed NSIS, MSI, and updater installers
+        if: github.ref_type == 'tag'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: >-
+          npm run tauri -- build
+          --target x86_64-pc-windows-msvc
+          --bundles nsis,msi
+          --config src-tauri/tauri.release.conf.json
 
       - name: Verify PE imports and installers
         run: npm run verify:windows
@@ -180,6 +230,13 @@ jobs:
           New-Item -ItemType Directory -Force release-assets | Out-Null
           Copy-Item -LiteralPath $nsis[0].FullName -Destination "release-assets/OshiClip_${version}_windows-x64-setup.exe"
           Copy-Item -LiteralPath $msi[0].FullName -Destination "release-assets/OshiClip_${version}_windows-x64.msi"
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $signature = "$($nsis[0].FullName).sig"
+            if (-not (Test-Path -LiteralPath $signature -PathType Leaf)) {
+              throw "Missing NSIS updater signature: $signature"
+            }
+            Copy-Item -LiteralPath $signature -Destination "release-assets/OshiClip_${version}_windows-x64-setup.exe.sig"
+          }
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v7
@@ -201,6 +258,14 @@ jobs:
       contents: write
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
       - name: Download macOS artifact
         uses: actions/download-artifact@v8
         with:
@@ -213,6 +278,9 @@ jobs:
           name: oshiclip-windows-x64
           path: release-assets
 
+      - name: Generate updater manifest
+        run: node scripts/generate-updater-manifest.mjs release-assets
+
       - name: Generate SHA-256 manifest
         shell: bash
         run: |
@@ -223,7 +291,7 @@ jobs:
             | xargs -0 sha256sum \
             | sed 's#  \./#  #' \
             > "$manifest"
-          test "$(wc -l < "$manifest")" -eq 3
+          test "$(wc -l < "$manifest")" -eq 7
           mv "$manifest" SHA256SUMS.txt
 
       - name: Create or update GitHub Release
@@ -233,7 +301,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           mapfile -d '' assets < <(find release-assets -maxdepth 1 -type f -print0 | sort -z)
-          test "${#assets[@]}" -eq 4
+          test "${#assets[@]}" -eq 8
 
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
