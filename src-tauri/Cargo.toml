@@ -1,0 +1,46 @@
+[package]
+name = "vods-oshi"
+version = "0.1.2"
+description = "Download and remux precise YouTube livestream clips without a terminal"
+authors = ["VODS Oshi contributors"]
+edition = "2021"
+rust-version = "1.85"
+
+[lib]
+name = "vods_oshi_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tauri = { version = "2", features = [] }
+tauri-plugin-deep-link = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "sync", "time"] }
+url = "2"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+lzma-rust2 = { version = "0.16.5", default-features = false, features = ["std", "xz"] }
+tar = { version = "0.4", default-features = false }
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+
+[dev-dependencies]
+lzma-rust2 = { version = "0.16.5", default-features = false, features = ["encoder", "std", "xz"] }
+tar = { version = "0.4", default-features = false }
+tempfile = "3"

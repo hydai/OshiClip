@@ -1,0 +1,62 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VODS Oshi",
+  "version": "0.1.2",
+  "identifier": "tw.oshi.vods",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "VODS Oshi",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 900,
+        "minHeight": 650,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Utility",
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "wix": {
+        "upgradeCode": "2b1308bd-5b6f-5d63-a252-d1bfb89532b4"
+      }
+    },
+    "shortDescription": "精準下載 YouTube 直播片段",
+    "longDescription": "透過圖形介面精準下載與合併 YouTube 直播片段，不需安裝或操作終端機工具。"
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["oshi-vods"]
+      }
+    }
+  }
+}

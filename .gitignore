@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# frontend output
+dist/
+
+# Rust / Tauri output
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# local tooling
+.DS_Store
+*.log
+.env
+.env.local
+.vinext/
+.wrangler/
+
+# editor
+.idea/
+.vscode/

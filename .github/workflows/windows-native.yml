@@ -1,0 +1,96 @@
+name: Windows native build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/windows-native.yml"
+      - "scripts/verify-windows-bundle.ps1"
+      - "src/**"
+      - "src-tauri/**"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy, rustfmt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Test frontend and Rust
+        run: npm test
+
+      - name: Run strict Rust lint
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+
+      - name: Build NSIS and MSI installers
+        run: npm run tauri -- build --bundles nsis,msi
+
+      - name: Verify PE imports and installers
+        run: npm run verify:windows
+
+      - name: Generate SHA-256 manifest
+        run: |
+          $bundles = @(
+            Get-ChildItem src-tauri/target/release/bundle -Recurse -File |
+              Where-Object { $_.Extension -in '.exe', '.msi' }
+          )
+          if ($bundles.Count -eq 0) { throw 'No Windows installers were produced.' }
+          $lines = $bundles | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($PWD.Path, $_.FullName).Replace('\', '/')
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+            "$hash  $relative"
+          }
+          $lines | Set-Content -Encoding ascii windows-SHA256SUMS.txt
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: vods-oshi-windows-x64-unsigned
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            windows-SHA256SUMS.txt
