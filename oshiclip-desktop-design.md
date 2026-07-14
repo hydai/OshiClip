@@ -443,7 +443,7 @@ while let Some(event) = rx.recv().await {
 
 macOS release bundle 也必須是 self-contained：`otool -L` 只允許 `/System/Library` 與 `/usr/lib` 下的 Apple 系統函式庫。AppKit、WebKit、Foundation 與 `libSystem` 是 Tauri / macOS 必要的動態連結，macOS 不提供可供 App 靜態打包的版本。Linux `.tar.xz` 解壓使用 target-specific 的 `tar` 與純 Rust `lzma-rust2`（關閉 default features 與 unsafe optimization），不使用 `xz2`、`lzma-sys` 或 Homebrew `liblzma`。
 
-Windows 首發 target 固定為 `x86_64-pc-windows-msvc`：以 `target-feature=+crt-static` 將 MSVC CRT 靜態編入，release 驗證以 `dumpbin /DEPENDENTS` 拒絕 `VCRUNTIME*`、`MSVCP*`、UCRT 與任何不在 Windows 系統目錄的 DLL。WebView2 是 Tauri 必要的 Microsoft 系統 runtime，不納入 App 靜態連結；NSIS / MSI 內嵌約 1.8 MB 的 WebView2 bootstrapper，在系統缺少 runtime 時協助安裝。Windows ARM64 使用者先透過 Windows 11 x64 emulation 執行 x64 build，待 FFmpeg provider 有一致的 ARM64 資產後才開放原生 ARM64 target。
+Windows 首發 target 固定為 `x86_64-pc-windows-msvc`：以 `target-feature=+crt-static` 將 MSVC CRT 靜態編入，並由 `build.rs` 停用 Tauri 2.11 只靜態化 VCRUNTIME、仍動態選用 UCRT 的 legacy override；缺少 `crt-static` target feature 時 build 必須直接失敗。release 驗證以 `dumpbin /DEPENDENTS` 拒絕 `VCRUNTIME*`、`MSVCP*`、UCRT 與任何不在 Windows 系統目錄的 DLL。WebView2 是 Tauri 必要的 Microsoft 系統 runtime，不納入 App 靜態連結；NSIS / MSI 內嵌約 1.8 MB 的 WebView2 bootstrapper，在系統缺少 runtime 時協助安裝。Windows ARM64 使用者先透過 Windows 11 x64 emulation 執行 x64 build，待 FFmpeg provider 有一致的 ARM64 資產後才開放原生 ARM64 target。
 
 ---
 

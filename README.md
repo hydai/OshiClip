@@ -36,7 +36,7 @@ npm run verify:macos
 
 ### Windows x64
 
-Windows release 使用 `x86_64-pc-windows-msvc`，並透過 [`.cargo/config.toml`](./.cargo/config.toml) 將 MSVC CRT 靜態編入。Tauri 仍會使用 Windows 系統 DLL 與 Microsoft WebView2；安裝器會內嵌 WebView2 bootstrapper，當系統缺少 runtime 時再由 Microsoft 安裝。
+Windows release 使用 `x86_64-pc-windows-msvc`，並透過 [`.cargo/config.toml`](./.cargo/config.toml) 將 MSVC CRT 靜態編入。[`build.rs`](./src-tauri/build.rs) 會停用 Tauri 2.11 僅靜態化 VCRUNTIME、但仍動態載入 UCRT 的 legacy override，並在缺少 `crt-static` target feature 時直接中止 build。Tauri 仍會使用 Windows 系統 DLL 與 Microsoft WebView2；安裝器會內嵌 WebView2 bootstrapper，當系統缺少 runtime 時再由 Microsoft 安裝。
 
 請在 Windows 主機執行：
 
