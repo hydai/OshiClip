@@ -5,16 +5,20 @@ import {
   FolderDown,
   History,
   Library,
-  ListMusic,
   RefreshCw,
   Settings2,
   Sparkles,
   Wrench,
+  type LucideIcon,
 } from "lucide-react";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { DownloadView } from "./views/DownloadView";
-import { AuroraView } from "./views/AuroraView";
 import { HistoryView } from "./views/HistoryView";
+import {
+  ONLINE_SERVICES,
+  OnlineServiceView,
+  type OnlineServiceId,
+} from "./views/OnlineServiceView";
 import { SettingsView } from "./views/SettingsView";
 import { ToolsView } from "./views/ToolsView";
 import { VodLibraryView } from "./views/VodLibraryView";
@@ -47,10 +51,17 @@ import type {
 type ViewName =
   | "download"
   | "library"
-  | "aurora"
   | "tools"
   | "history"
-  | "settings";
+  | "settings"
+  | OnlineServiceId;
+type NavItem = {
+  id: ViewName;
+  label: string;
+  detail?: string;
+  icon: LucideIcon;
+};
+type NavSection = { id: string; label: string; items: NavItem[] };
 type Toast = { id: number; tone: "success" | "error" | "info"; message: string };
 
 interface AppProps {
@@ -70,7 +81,9 @@ const EMPTY_STATUS: AppStatus = {
 
 export default function App({ initialUiPreferences }: AppProps) {
   const [view, setView] = useState<ViewName>("download");
-  const [auroraMounted, setAuroraMounted] = useState(false);
+  const [mountedOnlineServices, setMountedOnlineServices] = useState<
+    ReadonlySet<OnlineServiceId>
+  >(() => new Set());
   const [uiPreferences, setUiPreferences] = useState(initialUiPreferences);
   const [status, setStatus] = useState<AppStatus>(EMPTY_STATUS);
   const [loading, setLoading] = useState(true);
@@ -291,17 +304,46 @@ export default function App({ initialUiPreferences }: AppProps) {
     }
   }, [notify]);
 
-  const navItems = useMemo(
+  const selectView = useCallback((nextView: ViewName) => {
+    const service = ONLINE_SERVICES.find(({ id }) => id === nextView);
+    if (service) {
+      setMountedOnlineServices((current) => {
+        if (current.has(service.id)) return current;
+        const next = new Set(current);
+        next.add(service.id);
+        return next;
+      });
+    }
+    setView(nextView);
+  }, []);
+
+  const navSections = useMemo<NavSection[]>(
     () => [
-      { id: "download" as const, label: "下載片段", icon: Download },
-      { id: "library" as const, label: "歌回資料庫", icon: Library },
-      { id: "aurora" as const, label: "時間軸投稿", icon: ListMusic },
-      { id: "tools" as const, label: "工具管理", icon: Wrench },
-      { id: "history" as const, label: "下載紀錄", icon: History },
-      { id: "settings" as const, label: "介面設定", icon: Settings2 },
+      {
+        id: "workspace",
+        label: "工作區",
+        items: [
+          { id: "download", label: "下載片段", icon: Download },
+          { id: "library", label: "歌回資料庫", icon: Library },
+          { id: "tools", label: "工具管理", icon: Wrench },
+          { id: "history", label: "下載紀錄", icon: History },
+          { id: "settings", label: "介面設定", icon: Settings2 },
+        ],
+      },
+      {
+        id: "online-services",
+        label: "線上服務",
+        items: ONLINE_SERVICES.map(({ id, name, navDetail, icon }) => ({
+          id,
+          label: name,
+          detail: navDetail,
+          icon,
+        })),
+      },
     ],
     [],
   );
+  const activeOnlineService = ONLINE_SERVICES.find(({ id }) => id === view);
 
   return (
     <div className="app-shell">
@@ -317,24 +359,34 @@ export default function App({ initialUiPreferences }: AppProps) {
         </div>
 
         <nav className="primary-nav" aria-label="主要導覽">
-          <p className="nav-eyebrow">工作區</p>
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                className={view === item.id ? "nav-item active" : "nav-item"}
-                onClick={() => {
-                  if (item.id === "aurora") setAuroraMounted(true);
-                  setView(item.id);
-                }}
-              >
-                <Icon size={18} strokeWidth={1.8} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
+          {navSections.map((section) => (
+            <section
+              className="nav-section"
+              aria-labelledby={`${section.id}-nav-label`}
+              key={section.id}
+            >
+              <p className="nav-eyebrow" id={`${section.id}-nav-label`}>
+                {section.label}
+              </p>
+              <div className="nav-section-items">
+                {section.items.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={view === item.id ? "nav-item active" : "nav-item"}
+                      onClick={() => selectView(item.id)}
+                    >
+                      <Icon size={18} strokeWidth={1.8} />
+                      <span>{item.label}</span>
+                      {item.detail && <small>{item.detail}</small>}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
         </nav>
 
         <div className="sidebar-spacer" />
@@ -380,10 +432,10 @@ export default function App({ initialUiPreferences }: AppProps) {
             <span className="runtime-dot" />
             {isDesktopRuntime ? "Desktop App" : "互動預覽模式"}
           </div>
-          {view === "aurora" ? (
+          {activeOnlineService ? (
             <div className="readiness ready">
               <Sparkles size={16} />
-              <span>Aurora 線上時間軸</span>
+              <span>{activeOnlineService.statusLabel}</span>
             </div>
           ) : (
             <div className={toolsReady ? "readiness ready" : "readiness warning"}>
@@ -417,10 +469,17 @@ export default function App({ initialUiPreferences }: AppProps) {
               onChoose={chooseLibraryPerformance}
             />
           )}
-          {auroraMounted && (
-            <div className="aurora-view-mount" hidden={view !== "aurora"}>
-              <AuroraView />
-            </div>
+          {ONLINE_SERVICES.map(
+            (service) =>
+              mountedOnlineServices.has(service.id) && (
+                <div
+                  className="online-service-view-mount"
+                  hidden={view !== service.id}
+                  key={service.id}
+                >
+                  <OnlineServiceView service={service} />
+                </div>
+              ),
           )}
           {view === "history" && (
             <HistoryView
