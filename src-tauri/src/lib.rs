@@ -5,6 +5,7 @@ mod executor;
 mod history;
 mod manifest;
 mod models;
+mod vod_library;
 
 #[cfg(all(target_os = "windows", not(target_arch = "x86_64")))]
 compile_error!("Windows releases currently support only x86_64-pc-windows-msvc");
@@ -24,6 +25,7 @@ pub(crate) struct AppState {
     pub active_download: Mutex<Option<ActiveDownload>>,
     pub history_lock: Mutex<()>,
     pub install_lock: tokio::sync::Mutex<()>,
+    pub vod_library_cache: tokio::sync::Mutex<Option<vod_library::CachedVodLibrary>>,
 }
 
 impl AppState {
@@ -33,6 +35,7 @@ impl AppState {
             active_download: Mutex::new(None),
             history_lock: Mutex::new(()),
             install_lock: tokio::sync::Mutex::new(()),
+            vod_library_cache: tokio::sync::Mutex::new(None),
         }
     }
 }
@@ -87,6 +90,7 @@ pub fn run() {
             binary_manager::install_tool,
             binary_manager::switch_tool_version,
             binary_manager::remove_tool_version,
+            vod_library::get_vod_library,
         ])
         .run(tauri::generate_context!())
         .expect("error while running OshiClip");

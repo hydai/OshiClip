@@ -12,6 +12,7 @@ import type {
   DownloadSpec,
   InstalledVersion,
   ToolName,
+  VodLibraryDataset,
 } from "../types";
 import {
   INITIAL_APP_UPDATE_PROGRESS,
@@ -104,6 +105,57 @@ let browserHistory: DownloadHistoryEntry[] = [
     fileExists: false,
   },
 ];
+
+const browserVodLibrary: VodLibraryDataset = {
+  schemaVersion: "1.0.0",
+  publishedAt: "2026-07-11T20:04:22.682Z",
+  sha256: "preview",
+  counts: { streamers: 2, vods: 3, performances: 7 },
+  streamers: [
+    {
+      slug: "earendel",
+      displayName: "Earendel ch. 厄倫蒂兒",
+      group: "春魚創意",
+      vods: [
+        {
+          title: "【伴睡歌回】有些話不是不想說，只是選擇不說了。",
+          date: "2026-06-15",
+          videoId: "ZsObrmIQLGk",
+          performances: [
+            { performanceId: "preview-p1", title: "她說", originalArtist: "林俊傑", startSeconds: 1702, endSeconds: 2000 },
+            { performanceId: "preview-p2", title: "慢冷", originalArtist: "梁靜茹", startSeconds: 2140, endSeconds: 2416 },
+            { performanceId: "preview-p3", title: "小幸運", originalArtist: "田馥甄", startSeconds: 2870, endSeconds: 3134 },
+          ],
+        },
+        {
+          title: "深夜治癒歌回｜一起唱到睡著",
+          date: "2026-05-18",
+          videoId: "mLSIBfQWqB4",
+          performances: [
+            { performanceId: "preview-p4", title: "如果可以", originalArtist: "韋禮安", startSeconds: 4799, endSeconds: 4993 },
+            { performanceId: "preview-p5", title: "刻在我心底的名字", originalArtist: "盧廣仲", startSeconds: 5210, endSeconds: 5488 },
+          ],
+        },
+      ],
+    },
+    {
+      slug: "nagi",
+      displayName: "涅默 Nemesis",
+      group: "極深空計畫",
+      vods: [
+        {
+          title: "週末歌回：把喜歡的歌都唱一遍",
+          date: "2026-04-26",
+          videoId: "dQw4w9WgXcQ",
+          performances: [
+            { performanceId: "preview-p6", title: "群青", originalArtist: "YOASOBI", startSeconds: 612, endSeconds: 868 },
+            { performanceId: "preview-p7", title: "花に亡霊", originalArtist: "ヨルシカ", startSeconds: 1040, endSeconds: 1298 },
+          ],
+        },
+      ],
+    },
+  ],
+};
 
 function emitBrowserEvent<Name extends DesktopEventName>(
   name: Name,
@@ -390,6 +442,16 @@ export async function revealHistoryOutput(id: string): Promise<void> {
   }
   const entry = browserHistory.find((item) => item.id === id);
   if (!entry?.fileExists) throw new Error("下載檔案已被移動或刪除");
+}
+
+export async function getVodLibrary(
+  forceRefresh = false,
+): Promise<VodLibraryDataset> {
+  if (isDesktopRuntime) {
+    return invoke<VodLibraryDataset>("get_vod_library", { forceRefresh });
+  }
+  await new Promise((resolve) => window.setTimeout(resolve, forceRefresh ? 420 : 180));
+  return structuredClone(browserVodLibrary);
 }
 
 export async function onDesktopEvent<Name extends DesktopEventName>(

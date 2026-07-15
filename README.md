@@ -6,9 +6,15 @@
 
 <p align="center"><em>Clip the moment. Keep your oshi.</em></p>
 
-以 Tauri v2、React 與 Rust 製作的跨平台直播片段下載工具。使用者可透過圖形介面輸入 YouTube 網址與起訖時間；應用程式會自行管理、驗證並執行 yt-dlp、ffmpeg 與 Deno，不需操作終端機。成功完成的片段會保存在本機下載紀錄中，方便重新開啟檔案位置或帶回原本設定。介面支援深色／淺色模式與五級字體，選擇會保存在本機。桌面版啟動時也會檢查 GitHub Release，發現新版本後可在應用程式內完成簽章驗證、下載、安裝與重新啟動。
+以 Tauri v2、React 與 Rust 製作的跨平台直播片段下載工具。使用者可透過圖形介面輸入 YouTube 網址與起訖時間，也能在內建的歌回資料庫直接搜尋 VTuber、VOD、歌曲或原唱，再將正式時間軸帶入下載表單；應用程式會自行管理、驗證並執行 yt-dlp、ffmpeg 與 Deno，不需操作終端機。成功完成的片段會保存在本機下載紀錄中，方便重新開啟檔案位置或帶回原本設定。介面支援深色／淺色模式與五級字體，選擇會保存在本機。桌面版啟動時也會檢查 GitHub Release，發現新版本後可在應用程式內完成簽章驗證、下載、安裝與重新啟動。
 
 OshiClip 可獨立使用，也能承接 [vods.oshi.tw](https://vods.oshi.tw) 產生的片段參數。
+
+## 歌回資料來源
+
+內建的「歌回資料庫」由 Rust 後端讀取 [`data.oshi.tw` VOD v1 manifest](https://data.oshi.tw/vod/v1/manifest.json)，不依賴 `vods.oshi.tw` 的頁面或瀏覽器 CORS。候選 snapshot 必須通過 trusted URL、HTTP content type、10 MiB 大小上限、SHA-256、schema major、欄位語意、canonical ordering、ID 唯一性與 counts 驗證，才會原子切換成目前資料；更新失敗時會保留上一份已驗證的記憶體快取。
+
+新分頁提供全文搜尋、VTuber 篩選、日期排序、VOD 歌曲時間軸與「帶入下載」。選擇歌曲只會預填既有下載表單，不會自動執行下載。
 
 ## 開發
 

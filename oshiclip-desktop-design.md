@@ -2,11 +2,11 @@
 
 | 項目 | 內容 |
 |---|---|
-| 文件狀態 | Implemented MVP v0.2 |
+| 文件狀態 | Implemented through Desktop next（v0.5.0 base） |
 | 目標平台 | macOS (Intel/ARM)、Windows (x64)、Linux (x64/ARM64) |
 | 核心技術 | Tauri v2 + Rust backend + React 19 / Vite 8 前端 |
 | 相依外部工具 | yt-dlp、ffmpeg、Deno（皆為執行期下載，非打包散布） |
-| 關聯專案 | vods.oshi.tw（既有網頁，產生 CLI 指令） |
+| 關聯專案 | prism.oshi.tw（資料生產）、data.oshi.tw（VOD v1 feed）、vods.oshi.tw（網頁 consumer） |
 
 ---
 
@@ -14,7 +14,7 @@
 
 ### 1.1 背景與問題陳述
 
-`vods.oshi.tw` 目前的運作模式是：使用者在網頁上選好影片與時間區間，網頁產生一段 `yt-dlp` 指令，使用者自行複製到 macOS / Linux / Windows 的 terminal 執行。
+本專案最初承接的 `vods.oshi.tw` 運作模式是：使用者在網頁上選好影片與時間區間，網頁產生一段 `yt-dlp` 指令，使用者自行複製到 macOS / Linux / Windows 的 terminal 執行。Prism 後續已將正式 VOD 資料發布為 `data.oshi.tw` v1 snapshot，因此桌面 App 也可直接成為受控 consumer，不再強制經過網站 UI。
 
 實際使用回饋顯示，**大量使用者不熟悉終端機操作**，導致：
 
@@ -30,6 +30,7 @@
 - **版本可控**：使用者可在 GUI 內更新工具、切換版本、回退到舊版。
 - **跨平台一致**：三平台行為與 UX 一致，維護一套程式碼。
 - **與網頁銜接**：能承接 `vods.oshi.tw` 產生的參數（理想為一鍵開啟）。
+- **直接資料探索**：從 `data.oshi.tw` 的已驗證正式資料搜尋 VOD／歌曲，直接帶入既有下載流程。
 
 ### 1.3 非目標（Non-Goals）
 
@@ -54,6 +55,7 @@
 | FR-6 | 可取消進行中的下載任務。 |
 | FR-7 | 完成後可一鍵開啟輸出檔所在資料夾。 |
 | FR-8 |（進階）承接來自 `vods.oshi.tw` 的深層連結參數並自動帶入表單。 |
+| FR-9 | 直接讀取 `data.oshi.tw` VOD v1 feed，提供搜尋、VTuber 篩選、VOD 歌曲時間軸與下載預填。 |
 
 ### 2.2 非功能需求（Non-Functional Requirements）
 
@@ -61,6 +63,7 @@
 |---|---|
 | 安裝體積 | 主程式 bundle < 20 MB（工具鏈執行期下載，不計入）。 |
 | 完整性 | 所有下載的二進位須通過 SHA256 驗證；驗證失敗不得留下半成品。 |
+| 資料信任 | VOD snapshot 須驗證 trusted URL、byte length、SHA256、schema、語意、ordering 與 counts 後才可顯示。 |
 | 原子性 | 版本安裝 / 切換須為原子操作，中途失敗不破壞既有可用版本。 |
 | 跨平台一致性 | 版本狀態不得依賴平台特性（如 symlink），須由 manifest 統一管理。 |
 | 可觀測性 | 保留 yt-dlp / ffmpeg 的完整 stdout/stderr 供除錯。 |
@@ -111,6 +114,7 @@ Tauri 官方 sidecar 假設 binary 於**打包時**放入，並會驗證 target-
 graph TD
     subgraph Frontend["前端 (WebView / React)"]
         UI_Main["下載表單畫面"]
+        UI_Library["歌回資料庫"]
         UI_Settings["工具管理 / 設定頁"]
         UI_Progress["進度與日誌顯示"]
     end
@@ -120,6 +124,7 @@ graph TD
         BinMgr["Binary Manager<br/>下載 / 驗證 / 切換"]
         ExecEngine["Execution Engine<br/>spawn / 進度解析 / 取消"]
         Manifest["Manifest Store<br/>版本狀態的唯一真相"]
+        VodFeed["VOD Feed Consumer<br/>fetch / 驗證 / last-known-good"]
     end
 
     subgraph External["外部"]
@@ -129,9 +134,11 @@ graph TD
         GH["GitHub Releases API"]
         BTBN["BtbN FFmpeg-Builds"]
         FFMPEG_STATIC["eugeneware/ffmpeg-static"]
+        OSHI_DATA["data.oshi.tw<br/>manifest + immutable snapshot"]
     end
 
     UI_Main -->|invoke command| CmdBuilder
+    UI_Library -->|get_vod_library| VodFeed
     UI_Settings -->|invoke command| BinMgr
     CmdBuilder --> ExecEngine
     ExecEngine -->|argv| YTDLP
@@ -143,6 +150,8 @@ graph TD
     BinMgr -->|列出 releases / 下載| GH
     BinMgr -->|非 macOS 下載| BTBN
     BinMgr -->|macOS 下載| FFMPEG_STATIC
+    VodFeed -->|固定 HTTPS URL| OSHI_DATA
+    UI_Library -->|選擇歌曲：預填| UI_Main
 ```
 
 ### 4.2 模組職責
@@ -153,6 +162,7 @@ graph TD
 | **Binary Manager** | 查詢可用版本、下載、SHA256 驗證、原子安裝、切換 selected、移除版本。是 §6 的實作主體。 |
 | **Execution Engine** | 以 argv spawn yt-dlp、串流 stdout/stderr、解析進度並 emit 事件、支援取消（kill 子行程樹）。 |
 | **Manifest Store** | 讀寫 `manifest.json`，是「哪些版本已安裝 / 當前選哪個」的**唯一真相來源**。 |
+| **VOD Feed Consumer** | 從固定 `data.oshi.tw` v1 manifest 取得 immutable snapshot，完成大小、SHA256、schema 與語意驗證，並保留 last-known-good 記憶體快取。 |
 
 ---
 
@@ -458,6 +468,7 @@ Windows 首發 target 固定為 `x86_64-pc-windows-msvc`：以 `target-feature=+
   - 格式 preset 下拉（預設隱藏 avc1/mp4a 細節，進階使用者可展開）。
   - 「開始」按鈕 → 進度區。
 - **進度區**：進度條、速度、ETA、可展開的日誌面板、取消按鈕、完成後「開啟資料夾」。
+- **歌回資料庫**：搜尋 VTuber／VOD／歌曲／原唱、VTuber 篩選、日期排序、VOD 展開時間軸與「帶入下載」。
 - **設定 / 工具管理頁**
   - yt-dlp、ffmpeg、Deno 各自列出：當前版本、已安裝版本清單、檢查更新、切換、移除。
   - 輸出目錄設定。
@@ -514,6 +525,30 @@ sequenceDiagram
 - **降級**：若使用者未安裝 app，網頁維持既有「複製指令」流程，兩者並存。
 - 網頁可偵測 app 是否安裝（嘗試喚起 scheme + timeout fallback），動態顯示「用 App 開啟」或「複製指令」。
 
+### 10.2 直接讀取 data.oshi.tw
+
+`data.oshi.tw` 的 feed 刻意沒有瀏覽器 CORS，因此 WebView 不直接 fetch，也不把 production domain 加進 CSP。Rust command `get_vod_library` 使用固定 manifest URL，拒絕 redirect 與任意 snapshot host，並在資料進入前端前完成 consumer contract 要求的完整驗證。
+
+```mermaid
+sequenceDiagram
+    participant UI as 歌回資料庫 UI
+    participant Rust as VOD Feed Consumer
+    participant Data as data.oshi.tw
+    UI->>Rust: get_vod_library(forceRefresh)
+    Rust->>Data: GET 固定 manifest.json
+    Data-->>Rust: hash / URL / bytes / counts
+    alt hash 與快取相同
+        Rust-->>UI: last-known-good dataset
+    else 新 hash
+        Rust->>Data: GET immutable snapshot
+        Rust->>Rust: length + SHA256 + schema + semantics
+        Rust-->>UI: 原子替換後的顯示模型
+    end
+    UI->>UI: 選擇歌曲 → 只預填下載表單
+```
+
+候選資料失敗時不覆蓋已驗證快取。一般頁面重入可沿用快取；明確按「更新資料」時錯誤會回到 UI，讓使用者知道 production refresh 未成功。
+
 ---
 
 ## 11. 安全性與授權
@@ -558,13 +593,15 @@ oshiclip/
 ├── src/                      # 前端 (React)
 │   ├── views/
 │   │   ├── DownloadView.tsx
-│   │   └── ToolsView.tsx
+│   │   ├── ToolsView.tsx
+│   │   └── VodLibraryView.tsx
 │   ├── lib/
 │   │   ├── desktop.ts        # invoke / event 封裝 + 瀏覽器模擬
 │   │   ├── deepLink.ts       # 新舊 URL scheme 白名單解析
 │   │   ├── deepLink.test.ts
 │   │   ├── time.ts           # 時間 / 檔名處理
-│   │   └── time.test.ts
+│   │   ├── time.test.ts
+│   │   └── vodLibrary.ts      # 搜尋 / 篩選 / 預填
 │   ├── App.tsx
 │   ├── types.ts
 │   └── styles.css
@@ -577,6 +614,7 @@ oshiclip/
 │   │   ├── command_builder.rs
 │   │   ├── executor.rs       # spawn / 進度 / 取消
 │   │   ├── models.rs
+│   │   ├── vod_library.rs    # data.oshi.tw 讀取與驗證
 │   │   └── error.rs
 │   ├── capabilities/default.json
 │   ├── Cargo.toml
@@ -602,6 +640,7 @@ tokio = { version = "1", features = ["full"] }
 zip = "4"                         # 解 Windows ffmpeg / Deno zip
 tempfile = "3"                    # app data 中的安全暫存目錄
 url = "2"                         # YouTube / deep-link 白名單驗證
+unicode-normalization = "0.1"     # VOD feed NFC 驗證
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tar = { version = "0.4", default-features = false }
@@ -655,14 +694,14 @@ fn remove_tool_version(state: State<'_, AppState>, tool: Tool, version: String)
 | M4 — UX 打磨 | 表單驗證、錯誤面板、開啟資料夾、preset | 響應式下載與工具管理界面 | ✅ 完成 |
 | M5 — 簽章與發佈 | 三平台簽章 / notarization / 安裝包 | 可散布的正式版 | ⏳ 待處理 |
 | M6 — Deep Link | `oshiclip://` 承接 + legacy 相容 + 網頁端偵測降級 | app 端註冊、單實例、白名單預填 | 🟡 app 端完成；網頁端待接 |
+| M7 — 歌回資料庫 | data.oshi.tw consumer + 搜尋／篩選／時間軸 + 下載預填 | 不經網站即可從正式資料選歌 | ✅ 完成 |
 
 ---
 
 ## 15. 未來擴充
 
 - 批次佇列：多個片段排隊下載。
-- 下載歷史紀錄與重跑。
-- 自動檢查 yt-dlp 更新（yt-dlp 更新頻繁，可做背景提示）。
+- 歌回資料庫篩選狀態持久化與常用 VTuber。
 - 進階格式選項（音訊擷取、字幕、縮圖）。
 - i18n（繁中 / 日文 / 英文）。
 
@@ -675,6 +714,7 @@ fn remove_tool_version(state: State<'_, AppState>, tool: Tool, version: String)
 - 前端採 React + TypeScript + Vite。
 - 工具保持執行期下載，不內嵌於 app bundle。
 - `oshiclip://` 與 legacy `oshi-vods://` 只允許 `download` host，並白名單驗證 video ID、整數時間與檔名；連結只預填，不自動執行。
+- `data.oshi.tw` 只能由 Rust 後端透過固定 v1 路徑讀取；候選 snapshot 完整驗證後才會替換快取，選歌同樣只預填、不自動下載。
 
 待決策：
 

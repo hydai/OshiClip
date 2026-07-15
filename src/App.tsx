@@ -4,6 +4,7 @@ import {
   Download,
   FolderDown,
   History,
+  Library,
   RefreshCw,
   Settings2,
   Sparkles,
@@ -14,6 +15,7 @@ import { DownloadView } from "./views/DownloadView";
 import { HistoryView } from "./views/HistoryView";
 import { SettingsView } from "./views/SettingsView";
 import { ToolsView } from "./views/ToolsView";
+import { VodLibraryView } from "./views/VodLibraryView";
 import {
   applicationVersion,
   canCheckForAppUpdate,
@@ -36,7 +38,7 @@ import type {
   DownloadPrefill,
 } from "./types";
 
-type ViewName = "download" | "tools" | "history" | "settings";
+type ViewName = "download" | "library" | "tools" | "history" | "settings";
 type Toast = { id: number; tone: "success" | "error" | "info"; message: string };
 
 interface AppProps {
@@ -155,6 +157,15 @@ export default function App({ initialUiPreferences }: AppProps) {
     [notify],
   );
 
+  const chooseLibraryPerformance = useCallback(
+    (nextPrefill: DownloadPrefill) => {
+      setPrefill(nextPrefill);
+      setView("download");
+      notify("已從歌回資料庫帶入片段，確認內容後即可開始。", "success");
+    },
+    [notify],
+  );
+
   const updateUiPreferences = useCallback((preferences: UiPreferences) => {
     setUiPreferences(preferences);
     applyUiPreferences(preferences);
@@ -166,6 +177,7 @@ export default function App({ initialUiPreferences }: AppProps) {
   const navItems = useMemo(
     () => [
       { id: "download" as const, label: "下載片段", icon: Download },
+      { id: "library" as const, label: "歌回資料庫", icon: Library },
       { id: "tools" as const, label: "工具管理", icon: Wrench },
       { id: "history" as const, label: "下載紀錄", icon: History },
       { id: "settings" as const, label: "介面設定", icon: Settings2 },
@@ -265,6 +277,12 @@ export default function App({ initialUiPreferences }: AppProps) {
           )}
           {view === "tools" && (
             <ToolsView status={status} refreshStatus={refreshStatus} notify={notify} />
+          )}
+          {view === "library" && (
+            <VodLibraryView
+              onChoose={chooseLibraryPerformance}
+              notify={notify}
+            />
           )}
           {view === "history" && (
             <HistoryView

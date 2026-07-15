@@ -68,6 +68,42 @@ export interface DownloadPrefill {
   outputName?: string;
 }
 
+export interface VodLibraryCounts {
+  streamers: number;
+  vods: number;
+  performances: number;
+}
+
+export interface VodLibraryPerformance {
+  performanceId: string;
+  title: string;
+  originalArtist: string | null;
+  startSeconds: number;
+  endSeconds: number;
+}
+
+export interface VodLibraryVod {
+  title: string;
+  date: string;
+  videoId: string;
+  performances: VodLibraryPerformance[];
+}
+
+export interface VodLibraryStreamer {
+  slug: string;
+  displayName: string;
+  group: string | null;
+  vods: VodLibraryVod[];
+}
+
+export interface VodLibraryDataset {
+  schemaVersion: string;
+  publishedAt: string;
+  sha256: string;
+  counts: VodLibraryCounts;
+  streamers: VodLibraryStreamer[];
+}
+
 export interface DownloadJob {
   jobId: string;
   outputPath: string;

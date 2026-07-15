@@ -1,6 +1,6 @@
 [package]
 name = "oshiclip"
-version = "0.4.0"
+version = "0.5.0"
 description = "Download and remux precise YouTube livestream clips without a terminal"
 authors = ["OshiClip contributors"]
 license = "Apache-2.0"
@@ -33,6 +33,7 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "sync", "time"] }
 url = "2"
+unicode-normalization = "0.1"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
