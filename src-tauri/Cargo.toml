@@ -1,6 +1,6 @@
 [package]
 name = "oshiclip"
-version = "0.5.0"
+version = "0.6.0"
 description = "Download and remux precise YouTube livestream clips without a terminal"
 authors = ["OshiClip contributors"]
 license = "Apache-2.0"
