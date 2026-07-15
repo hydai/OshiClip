@@ -12,6 +12,7 @@ import {
   UI_FONT_SIZES,
   UI_FONT_SIZE_SCALES,
   uiFontRootPixels,
+  uiMinimumTextPixels,
   type UiFontSize,
   type UiPreferences,
   type UiTheme,
@@ -55,6 +56,7 @@ const FONT_SIZE_OPTIONS = UI_FONT_SIZES.map((id) => ({
   label: FONT_SIZE_LABELS[id],
   percent: `${UI_FONT_SIZE_SCALES[id] * 100}%`,
   rootPixels: uiFontRootPixels(id),
+  minimumTextPixels: uiMinimumTextPixels(id),
 }));
 
 export function SettingsView({
@@ -126,8 +128,8 @@ export function SettingsView({
             <div>
               <h2>字體大小</h2>
               <p>
-                保留前一版的五個級距，並將介面中低於 1rem
-                的小字統一提高至 1rem。
+                補充資訊使用 0.9rem；主要內文與操作文字維持 1rem
+                以上，讓內容層級更容易辨認。
               </p>
             </div>
           </div>
@@ -154,7 +156,9 @@ export function SettingsView({
                     字
                   </span>
                   <strong>{option.label}</strong>
-                  <small>{option.percent} · 最小 {option.rootPixels}px</small>
+                  <small>
+                    {option.percent} · 補充文字最低 {option.minimumTextPixels}px
+                  </small>
                   <span className="choice-check" aria-hidden="true">
                     {selected && <Check size={14} />}
                   </span>

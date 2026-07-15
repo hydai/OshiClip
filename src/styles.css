@@ -20,9 +20,9 @@
   --coral: #ff8c79;
   --danger: #d85156;
   --shadow: 0 18px 50px rgb(31 38 57 / 9%);
-  /* Preserve the v0.6 scale while clamping every former sub-rem role to 1rem. */
-  --font-meta: 1rem;
-  --font-caption: 1rem;
+  /* Keep primary copy readable while restoring hierarchy for supporting text. */
+  --font-meta: 0.9rem;
+  --font-caption: 0.9rem;
   --font-label: 1rem;
   --font-body: 1rem;
   --font-body-strong: 1rem;

@@ -5,12 +5,14 @@ import {
   BASE_UI_FONT_PX,
   DEFAULT_UI_PREFERENCES,
   loadUiPreferences,
+  MIN_UI_TEXT_SCALE,
   parseUiPreferences,
   saveUiPreferences,
   UI_FONT_SIZES,
   UI_FONT_SIZE_SCALES,
   UI_PREFERENCES_STORAGE_KEY,
   uiFontRootPixels,
+  uiMinimumTextPixels,
   type UiPreferenceStorage,
 } from "./uiPreferences";
 
@@ -36,6 +38,10 @@ describe("UI preferences", () => {
     expect(BASE_UI_FONT_PX).toBe(16);
     expect(DEFAULT_UI_PREFERENCES.fontSize).toBe("md");
     expect(UI_FONT_SIZES.map(uiFontRootPixels)).toEqual([16, 18, 20, 22, 24]);
+    expect(MIN_UI_TEXT_SCALE).toBe(0.9);
+    expect(UI_FONT_SIZES.map(uiMinimumTextPixels)).toEqual([
+      14.4, 16.2, 18, 19.8, 21.6,
+    ]);
     for (const fontSize of UI_FONT_SIZES) {
       expect(uiFontRootPixels(fontSize)).toBe(
         BASE_UI_FONT_PX * UI_FONT_SIZE_SCALES[fontSize],
@@ -43,7 +49,7 @@ describe("UI preferences", () => {
     }
   });
 
-  it("keeps the stylesheet on the shared readable type scale", () => {
+  it("uses 0.9rem only for supporting text and keeps primary roles at 1rem", () => {
     const stylesheet = readFileSync(
       new URL("../styles.css", import.meta.url),
       "utf8",
@@ -56,9 +62,8 @@ describe("UI preferences", () => {
     const typeScaleRemSizes = [
       ...stylesheet.matchAll(/--font-[a-z-]+:\s*([\d.]+)rem;/g),
     ].map((match) => Number(match[1]));
-    const clampedLegacyRoles = [
-      "meta",
-      "caption",
+    const supportingRoles = ["meta", "caption"];
+    const primaryRoles = [
       "label",
       "body",
       "body-strong",
@@ -69,8 +74,14 @@ describe("UI preferences", () => {
 
     expect(directSubRemSizes).toEqual([]);
     expect(typeScaleRemSizes.length).toBeGreaterThan(0);
-    expect(typeScaleRemSizes.every((size) => size >= 1)).toBe(true);
-    for (const role of clampedLegacyRoles) {
+    expect(typeScaleRemSizes.every((size) => size >= MIN_UI_TEXT_SCALE)).toBe(
+      true,
+    );
+    for (const role of supportingRoles) {
+      const token = new RegExp(`--font-${role}:\\s*([\\d.]+)rem;`);
+      expect(Number(stylesheet.match(token)?.[1])).toBe(MIN_UI_TEXT_SCALE);
+    }
+    for (const role of primaryRoles) {
       const token = new RegExp(`--font-${role}:\\s*([\\d.]+)rem;`);
       expect(Number(stylesheet.match(token)?.[1])).toBe(1);
     }

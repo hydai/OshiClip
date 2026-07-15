@@ -5,6 +5,7 @@ export type UiTheme = (typeof UI_THEMES)[number];
 export type UiFontSize = (typeof UI_FONT_SIZES)[number];
 
 export const BASE_UI_FONT_PX = 16;
+export const MIN_UI_TEXT_SCALE = 0.9;
 export const UI_FONT_SIZE_SCALES: Record<UiFontSize, number> = {
   xs: 1,
   sm: 1.125,
@@ -15,6 +16,10 @@ export const UI_FONT_SIZE_SCALES: Record<UiFontSize, number> = {
 
 export function uiFontRootPixels(fontSize: UiFontSize): number {
   return BASE_UI_FONT_PX * UI_FONT_SIZE_SCALES[fontSize];
+}
+
+export function uiMinimumTextPixels(fontSize: UiFontSize): number {
+  return Math.round(uiFontRootPixels(fontSize) * MIN_UI_TEXT_SCALE * 10) / 10;
 }
 
 export interface UiPreferences {
