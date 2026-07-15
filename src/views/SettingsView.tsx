@@ -125,7 +125,10 @@ export function SettingsView({
             <span><Type size={19} /></span>
             <div>
               <h2>字體大小</h2>
-              <p>「最小」級距從 17 px（12.75 pt）開始，其餘四級會等比例放大整套文字。</p>
+              <p>
+                保留前一版的五個級距，並將介面中低於 1rem
+                的小字統一提高至 1rem。
+              </p>
             </div>
           </div>
 

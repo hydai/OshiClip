@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   applyUiPreferences,
+  BASE_UI_FONT_PX,
   DEFAULT_UI_PREFERENCES,
   loadUiPreferences,
-  MINIMUM_UI_FONT_PX,
   parseUiPreferences,
   saveUiPreferences,
   UI_FONT_SIZES,
@@ -32,17 +32,13 @@ describe("UI preferences", () => {
     expect(parseUiPreferences("not-json")).toEqual(DEFAULT_UI_PREFERENCES);
   });
 
-  it("keeps every font preset above 12pt and scales it proportionally", () => {
-    const twelvePointsInCssPixels = 12 * (96 / 72);
-
-    expect(MINIMUM_UI_FONT_PX).toBeGreaterThan(twelvePointsInCssPixels);
+  it("restores the previous five font presets and scales them proportionally", () => {
+    expect(BASE_UI_FONT_PX).toBe(16);
     expect(DEFAULT_UI_PREFERENCES.fontSize).toBe("md");
+    expect(UI_FONT_SIZES.map(uiFontRootPixels)).toEqual([16, 18, 20, 22, 24]);
     for (const fontSize of UI_FONT_SIZES) {
       expect(uiFontRootPixels(fontSize)).toBe(
-        MINIMUM_UI_FONT_PX * UI_FONT_SIZE_SCALES[fontSize],
-      );
-      expect(uiFontRootPixels(fontSize)).toBeGreaterThan(
-        twelvePointsInCssPixels,
+        BASE_UI_FONT_PX * UI_FONT_SIZE_SCALES[fontSize],
       );
     }
   });
@@ -60,10 +56,24 @@ describe("UI preferences", () => {
     const typeScaleRemSizes = [
       ...stylesheet.matchAll(/--font-[a-z-]+:\s*([\d.]+)rem;/g),
     ].map((match) => Number(match[1]));
+    const clampedLegacyRoles = [
+      "meta",
+      "caption",
+      "label",
+      "body",
+      "body-strong",
+      "subtitle",
+      "title",
+      "heading",
+    ];
 
     expect(directSubRemSizes).toEqual([]);
     expect(typeScaleRemSizes.length).toBeGreaterThan(0);
     expect(typeScaleRemSizes.every((size) => size >= 1)).toBe(true);
+    for (const role of clampedLegacyRoles) {
+      const token = new RegExp(`--font-${role}:\\s*([\\d.]+)rem;`);
+      expect(Number(stylesheet.match(token)?.[1])).toBe(1);
+    }
     for (const fontSize of UI_FONT_SIZES) {
       const selector = new RegExp(
         `html\\[data-font-size="${fontSize}"\\] \\{ font-size: ([\\d.]+)px; \\}`,

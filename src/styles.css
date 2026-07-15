@@ -1,7 +1,7 @@
 :root {
   color: #151a2b;
   background: #0b1020;
-  font-size: 17px;
+  font-size: 20px;
   font-family:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
     "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
@@ -20,25 +20,27 @@
   --coral: #ff8c79;
   --danger: #d85156;
   --shadow: 0 18px 50px rgb(31 38 57 / 9%);
-  /* 17px at the smallest preset is 12.75pt. Every text role stays at or above it. */
+  /* Preserve the v0.6 scale while clamping every former sub-rem role to 1rem. */
   --font-meta: 1rem;
-  --font-caption: 1.025rem;
-  --font-label: 1.05rem;
-  --font-body: 1.1rem;
-  --font-body-strong: 1.15rem;
-  --font-subtitle: 1.2rem;
-  --font-title: 1.3rem;
-  --font-heading: 1.5rem;
-  --font-brand: 1.75rem;
-  --font-display: 2.25rem;
-  --font-hero: 3rem;
+  --font-caption: 1rem;
+  --font-label: 1rem;
+  --font-body: 1rem;
+  --font-body-strong: 1rem;
+  --font-subtitle: 1rem;
+  --font-title: 1rem;
+  --font-heading: 1rem;
+  --font-brand: 1.1875rem;
+  --font-display: 1.4375rem;
+  --font-hero-min: 1.6875rem;
+  --font-hero-compact: 1.8125rem;
+  --font-hero: 2.4375rem;
 }
 
-html[data-font-size="xs"] { font-size: 17px; }
-html[data-font-size="sm"] { font-size: 19.125px; }
-html[data-font-size="md"] { font-size: 21.25px; }
-html[data-font-size="lg"] { font-size: 23.375px; }
-html[data-font-size="xl"] { font-size: 25.5px; }
+html[data-font-size="xs"] { font-size: 16px; }
+html[data-font-size="sm"] { font-size: 18px; }
+html[data-font-size="md"] { font-size: 20px; }
+html[data-font-size="lg"] { font-size: 22px; }
+html[data-font-size="xl"] { font-size: 24px; }
 
 html[data-theme="dark"] {
   color: #edf0f7;
@@ -191,7 +193,7 @@ summary:focus-visible {
   grid-template-columns: 22px 1fr auto;
   align-items: center;
   gap: 8px;
-  min-height: max(44px, 2.25rem);
+  min-height: max(44px, 2rem);
   padding: 0 11px;
   color: #8d96aa;
   text-align: left;
@@ -260,8 +262,8 @@ summary:focus-visible {
 .avatar {
   display: grid;
   place-items: center;
-  width: max(30px, 1.6rem);
-  height: max(30px, 1.6rem);
+  width: max(30px, 1.5rem);
+  height: max(30px, 1.5rem);
   color: #0e1628;
   font-size: var(--font-body-strong);
   font-weight: 900;
@@ -379,7 +381,7 @@ summary:focus-visible {
 .page-heading h1 {
   margin: 0;
   color: var(--ink);
-  font-size: clamp(var(--font-brand), 3.1vw, var(--font-hero));
+  font-size: clamp(var(--font-hero-min), 3.1vw, var(--font-hero));
   font-weight: 780;
   letter-spacing: -0.055em;
   line-height: 1.08;
@@ -514,8 +516,8 @@ summary:focus-visible {
 .step-number {
   display: grid;
   place-items: center;
-  width: max(29px, 1.6rem);
-  height: max(29px, 1.6rem);
+  width: max(29px, 1.45rem);
+  height: max(29px, 1.45rem);
   color: #5d5fc3;
   font-size: var(--font-label);
   font-weight: 850;
@@ -557,7 +559,7 @@ summary:focus-visible {
   align-items: center;
   gap: 9px;
   min-width: 0;
-  min-height: max(43px, 2.25rem);
+  min-height: max(43px, 2.15rem);
   padding: 0 12px;
   border: 1px solid #dedfe3;
   border-radius: 11px;
@@ -606,7 +608,7 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 2px;
-  min-height: max(43px, 2.25rem);
+  min-height: max(43px, 2.15rem);
   color: #a4a7af;
 }
 
@@ -780,7 +782,7 @@ summary:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  min-height: max(36px, 2rem);
+  min-height: max(36px, 1.8rem);
   padding: 0 14px;
   font-size: var(--font-body);
   font-weight: 750;
@@ -799,11 +801,11 @@ summary:focus-visible {
 .button.danger { color: #ad3e43; border: 1px solid #f0cdcf; background: #fff5f5; }
 .button.mint { color: #11231d; background: var(--mint); box-shadow: 0 8px 20px rgb(79 183 143 / 20%); }
 .button.full { width: 100%; }
-.button.small { min-height: max(34px, 1.75rem); }
+.button.small { min-height: max(34px, 1.7rem); }
 
 .submit-button {
   grid-column: 1 / -1;
-  min-height: max(44px, 2.25rem);
+  min-height: max(44px, 2.2rem);
   margin-top: -2px;
   border-radius: 11px;
 }
@@ -914,7 +916,7 @@ summary:focus-visible {
 }
 
 .empty-steps > div { display: grid; grid-template-columns: 27px 1fr; align-items: center; gap: 10px; }
-.empty-steps > div > span { display: grid; place-items: center; width: max(25px, 1.5rem); height: max(25px, 1.5rem); color: #717c91; font-size: var(--font-caption); font-weight: 800; border: 1px solid rgb(255 255 255 / 9%); border-radius: 8px; }
+.empty-steps > div > span { display: grid; place-items: center; width: max(25px, 1.25rem); height: max(25px, 1.25rem); color: #717c91; font-size: var(--font-caption); font-weight: 800; border: 1px solid rgb(255 255 255 / 9%); border-radius: 8px; }
 .empty-steps p { display: flex; flex-direction: column; gap: 2px; margin: 0; }
 .empty-steps strong { color: #bdc5d3; font-size: var(--font-label); }
 .empty-steps small { overflow: hidden; max-width: 240px; color: #68748a; font-size: var(--font-caption); text-overflow: ellipsis; white-space: nowrap; }
@@ -1363,7 +1365,7 @@ summary:focus-visible {
 .library-song-time { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 0; }
 .library-song-time > span { display: flex; align-items: center; gap: 4px; color: #686db0; font-size: var(--font-caption); font-weight: 700; font-variant-numeric: tabular-nums; }
 .library-song-time small { color: #a2a6af; font-size: var(--font-meta); }
-.library-download-button { min-height: max(32px, 1.75rem); padding-inline: 10px; font-size: var(--font-caption); white-space: nowrap; }
+.library-download-button { min-height: max(32px, 1.6rem); padding-inline: 10px; font-size: var(--font-caption); white-space: nowrap; }
 .library-more { display: flex; width: fit-content; margin: 14px auto 0; }
 
 .library-state-card {
@@ -1606,7 +1608,7 @@ summary:focus-visible {
   min-width: 267px;
 }
 
-.history-actions .button { min-height: max(32px, 1.75rem); padding-inline: 10px; font-size: var(--font-caption); }
+.history-actions .button { min-height: max(32px, 1.6rem); padding-inline: 10px; font-size: var(--font-caption); }
 .history-actions.active { grid-template-columns: 1fr; min-width: 94px; }
 .history-delete {
   display: grid;
@@ -2280,7 +2282,7 @@ html[data-theme="dark"] .update-error { color: #ffadb1; border-color: #67434a; b
   .settings-view,
   .tools-view { padding-top: 20px; }
   .page-heading { min-height: 88px; margin-bottom: 15px; }
-  .page-heading h1 { font-size: var(--font-display); }
+  .page-heading h1 { font-size: var(--font-hero-compact); }
 }
 
 @media (max-width: 850px) {
