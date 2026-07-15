@@ -57,6 +57,7 @@
 | FR-8 |（進階）承接來自 `vods.oshi.tw` 的深層連結參數並自動帶入表單。 |
 | FR-9 | 直接讀取 `data.oshi.tw` VOD v1 feed，提供搜尋、VTuber 篩選、VOD 歌曲時間軸與下載預填。 |
 | FR-10 | 下載紀錄頁置頂顯示進行中任務，切換分頁後仍可觀察並返回任務。 |
+| FR-11 | 從歌回資料庫帶入時，輸出檔名支援 metadata 標籤模板、即時實際檔名預覽與本機格式持久化。 |
 
 ### 2.2 非功能需求（Non-Functional Requirements）
 
@@ -467,7 +468,7 @@ Windows 首發 target 固定為 `x86_64-pc-windows-msvc`：以 `target-feature=+
 - **下載表單**
   - YouTube URL 輸入（貼上後可自動抓標題預覽）。
   - 起訖時間：`H:MM:SS` 輸入元件，內部轉秒數。
-  - 輸出檔名（提供預設命名樣式，如 `{暱稱}-{videoId}-{start}-{end}`）。
+  - 輸出檔名：一般 URL 使用 `oshiclip-{videoId}-{start}-{end}`；歌回資料提供 `<Streamer>-<歌曲名>-<歌手>-<歌回名稱>` 等標籤模板、點選插入與即時預覽。
   - 格式 preset 下拉（預設隱藏 avc1/mp4a 細節，進階使用者可展開）。
   - 「開始」按鈕 → 進度區。
 - **進度區**：進度條、速度、ETA、可展開的日誌面板、取消按鈕、完成後「開啟資料夾」。
@@ -491,6 +492,8 @@ interface DownloadSpec {
 ```
 
 這與網頁端「同一份參數 spec 產生指令」的概念一致，只是產物從「字串」變成「argv 陣列」。
+
+標籤只存在前端預填階段。前端將 metadata 代入後會先執行 NFKC、路徑字元替換與 120 字上限，`DownloadSpec.outputName` 只會收到最終實際檔名；Rust 仍會做第二層檢查。上次有效模板以 `oshiclip.filename-template.v1` 保存在 WebView `localStorage`。
 
 ---
 
@@ -611,6 +614,7 @@ oshiclip/
 │   │   ├── desktop.ts        # invoke / event 封裝 + 瀏覽器模擬
 │   │   ├── deepLink.ts       # 新舊 URL scheme 白名單解析
 │   │   ├── deepLink.test.ts
+│   │   ├── filenameTemplate.ts # 歌回 metadata 標籤代入 / 模板儲存
 │   │   ├── time.ts           # 時間 / 檔名處理
 │   │   ├── time.test.ts
 │   │   └── vodLibrary.ts      # 搜尋 / 篩選 / 預填

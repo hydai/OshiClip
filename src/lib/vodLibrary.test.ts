@@ -130,7 +130,13 @@ describe("VOD library helpers", () => {
       url: "https://www.youtube.com/watch?v=abcdefghijk",
       startSeconds: 120,
       endSeconds: 240,
-      outputName: "alpha-Blue Sky-abcdefghijk-120",
+      filenameMetadata: {
+        streamer: "Alpha",
+        songTitle: "Blue Sky",
+        artist: "Singer One",
+        vodTitle: "夏日歌回",
+        vodDate: "2026-07-10",
+      },
     });
   });
 });

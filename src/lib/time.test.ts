@@ -42,5 +42,9 @@ describe("YouTube and filename helpers", () => {
     expect(sanitizeOutputName('  Nagi: "favorite" / clip  ')).toBe(
       "Nagi- -favorite- - clip",
     );
+    const unicodeName = `${"推".repeat(119)}💜extra`;
+    const truncated = sanitizeOutputName(unicodeName);
+    expect(Array.from(truncated)).toHaveLength(120);
+    expect(truncated.endsWith("💜")).toBe(true);
   });
 });

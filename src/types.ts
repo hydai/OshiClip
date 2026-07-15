@@ -62,11 +62,20 @@ export interface DownloadSpec {
   formatPreset: FormatPreset;
 }
 
+export interface DownloadFilenameMetadata {
+  streamer: string;
+  songTitle: string;
+  artist: string | null;
+  vodTitle: string;
+  vodDate: string;
+}
+
 export interface DownloadPrefill {
   url: string;
   startSeconds: number;
   endSeconds: number;
   outputName?: string;
+  filenameMetadata?: DownloadFilenameMetadata;
 }
 
 export interface VodLibraryCounts {

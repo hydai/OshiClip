@@ -1,4 +1,3 @@
-import { sanitizeOutputName } from "./time";
 import type {
   DownloadPrefill,
   VodLibraryDataset,
@@ -115,8 +114,12 @@ export function performanceToDownloadPrefill(
     url: `https://www.youtube.com/watch?v=${vod.videoId}`,
     startSeconds: performance.startSeconds,
     endSeconds: performance.endSeconds,
-    outputName: sanitizeOutputName(
-      `${streamer.slug}-${performance.title}-${vod.videoId}-${performance.startSeconds}`,
-    ),
+    filenameMetadata: {
+      streamer: streamer.displayName,
+      songTitle: performance.title,
+      artist: performance.originalArtist,
+      vodTitle: vod.title,
+      vodDate: vod.date,
+    },
   };
 }

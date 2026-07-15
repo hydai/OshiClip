@@ -273,7 +273,7 @@ CTA 只切換至工具管理頁，不會直接開始安裝。
 | 結束時間 | 00:01:30 | 必須晚於開始時間 | 同上 |
 | 片段長度 | 由起訖計算 | 最長 6 小時 | 有效時在卡片標題右側顯示 duration badge |
 | Timeline | 起訖兩點與漸層線 | 僅反映輸入值 | 目前是裝飾／摘要，不可拖曳 |
-| 輸出檔名 | 自動產生或空值 | 最長 120 字；非法路徑字元於送出時替換 | 使用者一旦手動修改，之後不再自動更新 |
+| 輸出檔名 | 一般 URL 自動產生；歌回資料使用上次模板 | 模板最長 240 字，代入後實際檔名最長 120 字；未知或未閉合標籤會阻擋送出 | 歌回 metadata 帶入時顯示標籤 chips、實際檔名預覽與恢復預設 |
 | 副檔名 | .mp4 | 固定 | 以不可編輯 suffix 顯示 |
 | 進階格式 | 收合 | 相容 MP4、最佳品質 | 點擊整列展開 radio cards |
 
@@ -282,6 +282,14 @@ CTA 只切換至工具管理頁，不會直接開始安裝。
 ```text
 oshiclip-{videoId}-{startSeconds}-{endSeconds}
 ```
+
+從歌回資料庫帶入時，預設模板為：
+
+```text
+<Streamer>-<歌曲名>-<歌手>-<歌回名稱>
+```
+
+可用標籤為 `<Streamer>`、`<歌曲名>`、`<歌手>`、`<歌回名稱>`、`<歌回日期>`、`<VideoID>`、`<開始時間>` 與 `<結束時間>`。缺少原唱時 `<歌手>` 代入「未知歌手」；時間以 `HH-MM-SS` 代入。模板儲存於 `oshiclip.filename-template.v1`，下次選歌自動沿用。
 
 檔名正規化規則：
 
@@ -309,14 +317,16 @@ oshiclip-{videoId}-{startSeconds}-{endSeconds}
 2. 時間格式不是 HH:MM:SS 相容格式。
 3. 結束時間不晚於開始時間。
 4. 片段超過 6 小時。
-5. 輸出檔名清理後為空。
+5. 檔名模板含未知或未閉合標籤。
+6. 沒有歌回 metadata 時使用標籤語法。
+7. 輸出檔名清理後為空。
 
 現況細節：
 
 - URL 完全空白時不顯示錯誤，只停用 CTA。
 - 前端即時驗證只檢查 host 與 video ID；後端額外要求 HTTPS。HTTP URL 因此可能先通過表單，送出後才被拒絕。
 - 工具未就緒時不在按鈕附近顯示原因，依賴頁面上方 Banner 與 Topbar 狀態。
-- 檔名字元會在送出時清理，輸入框本身不會即時顯示清理後結果。
+- 一般檔名仍在送出時清理；歌回模板會即時顯示代入與清理後的 `.mp4` 預覽。
 
 ### 5.8 主要 CTA
 
@@ -695,11 +705,17 @@ UI 安裝階段：
   url: `https://www.youtube.com/watch?v=${videoId}`,
   startSeconds,
   endSeconds,
-  outputName: `${streamerSlug}-${songTitle}-${videoId}-${startSeconds}`
+  filenameMetadata: {
+    streamer: streamerDisplayName,
+    songTitle,
+    artist: originalArtist,
+    vodTitle,
+    vodDate
+  }
 }
 ```
 
-檔名仍會通過既有 `sanitizeOutputName`。操作後切到下載頁、更新表單並顯示成功 toast；和 deep link 相同，只預填、不自動執行。
+下載頁將 metadata 代入使用者的模板，即時顯示通過 `sanitizeOutputName` 的實際檔名。操作後切到下載頁、更新表單並顯示成功 toast；和 deep link 相同，只預填、不自動執行。
 
 ### 10.5 資料信任與失敗狀態
 
@@ -828,6 +844,22 @@ interface ActiveDownloadStatus {
 interface UiPreferences {
   theme: "light" | "dark";
   fontSize: "xs" | "sm" | "md" | "lg" | "xl";
+}
+
+interface DownloadFilenameMetadata {
+  streamer: string;
+  songTitle: string;
+  artist: string | null;
+  vodTitle: string;
+  vodDate: string;
+}
+
+interface DownloadPrefill {
+  url: string;
+  startSeconds: number;
+  endSeconds: number;
+  outputName?: string;
+  filenameMetadata?: DownloadFilenameMetadata;
 }
 
 interface VodLibraryDataset {
@@ -1139,7 +1171,7 @@ Inter → system UI → Segoe UI → Noto Sans TC → PingFang TC
 - Download state card：idle、starting、running、completed、error。
 - History card：available、missing、pending action。
 - Library card：collapsed、expanded、song match、refreshing。
-- Input：empty、focused、valid、invalid、disabled。
+- Input：empty、focused、valid、invalid、disabled、filename template + resolved preview。
 
 ---
 
@@ -1149,6 +1181,7 @@ Inter → system UI → Segoe UI → Noto Sans TC → PingFang TC
 |---|---|
 | App Shell、Sidebar、Topbar、Toast、Deep Link | [`src/App.tsx`](./src/App.tsx) |
 | 下載表單與任務狀態 | [`src/views/DownloadView.tsx`](./src/views/DownloadView.tsx) |
+| 檔名標籤解析、預覽與持久化 | [`src/lib/filenameTemplate.ts`](./src/lib/filenameTemplate.ts) |
 | 歌回資料庫頁 | [`src/views/VodLibraryView.tsx`](./src/views/VodLibraryView.tsx) |
 | 歌回搜尋、篩選與下載預填 | [`src/lib/vodLibrary.ts`](./src/lib/vodLibrary.ts) |
 | 工具卡、版本與輸出資料夾 | [`src/views/ToolsView.tsx`](./src/views/ToolsView.tsx) |

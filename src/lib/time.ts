@@ -59,12 +59,12 @@ export function buildDefaultOutputName(
 }
 
 export function sanitizeOutputName(value: string): string {
-  return value
+  const sanitized = value
     .normalize("NFKC")
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
     .replace(/\.{2,}/g, ".")
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/[. ]+$/g, "")
-    .slice(0, 120);
+    .replace(/[. ]+$/g, "");
+  return Array.from(sanitized).slice(0, 120).join("");
 }

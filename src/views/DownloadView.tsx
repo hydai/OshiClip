@@ -31,6 +31,14 @@ import {
   downloadPhaseLabel,
   formatElapsedTime,
 } from "../lib/downloadActivity";
+import {
+  DEFAULT_FILENAME_TEMPLATE,
+  FILENAME_TEMPLATE_MAX_LENGTH,
+  FILENAME_TEMPLATE_TAGS,
+  loadFilenameTemplate,
+  resolveFilenameTemplate,
+  saveFilenameTemplate,
+} from "../lib/filenameTemplate";
 import { formatHistoryBytes } from "../lib/history";
 import {
   buildDefaultOutputName,
@@ -42,6 +50,7 @@ import {
 } from "../lib/time";
 import type {
   AppStatus,
+  DownloadFilenameMetadata,
   DownloadPhase,
   DownloadPrefill,
   DownloadSpec,
@@ -62,7 +71,13 @@ const PREVIEW_PREFILL: DownloadPrefill = {
   url: "https://www.youtube.com/watch?v=mLSIBfQWqB4",
   startSeconds: 4799,
   endSeconds: 4993,
-  outputName: "nagi-favorite-clip",
+  filenameMetadata: {
+    streamer: "涅默 Nemesis",
+    songTitle: "六等星の夜",
+    artist: "Aimer",
+    vodTitle: "深夜歌回：把喜歡的歌唱給你聽",
+    vodDate: "2026-07-10",
+  },
 };
 
 export function DownloadView({
@@ -75,20 +90,33 @@ export function DownloadView({
   const initial =
     status.activeDownload ??
     ("__TAURI_INTERNALS__" in window ? null : PREVIEW_PREFILL);
+  const initialFilenameMetadata =
+    initial && "filenameMetadata" in initial
+      ? initial.filenameMetadata ?? null
+      : null;
   const [url, setUrl] = useState(initial?.url ?? "");
   const [startTime, setStartTime] = useState(formatTimecode(initial?.startSeconds ?? 0));
   const [endTime, setEndTime] = useState(formatTimecode(initial?.endSeconds ?? 90));
-  const [outputName, setOutputName] = useState(initial?.outputName ?? "");
+  const [filenameMetadata, setFilenameMetadata] =
+    useState<DownloadFilenameMetadata | null>(initialFilenameMetadata);
+  const [outputName, setOutputName] = useState(
+    initialFilenameMetadata
+      ? loadFilenameTemplate()
+      : initial?.outputName ?? "",
+  );
   const [formatPreset, setFormatPreset] = useState<FormatPreset>(
     status.activeDownload?.formatPreset ?? "avc1_mp4a",
   );
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [outputTouched, setOutputTouched] = useState(Boolean(initial?.outputName));
+  const [outputTouched, setOutputTouched] = useState(
+    Boolean(initial?.outputName || initialFilenameMetadata),
+  );
   const [downloadState, setDownloadState] = useState<DownloadState>(
     status.activeDownload ? "running" : "idle",
   );
   const [jobId, setJobId] = useState<string | null>(status.activeJobId);
   const jobIdRef = useRef<string | null>(status.activeJobId);
+  const filenameInputRef = useRef<HTMLInputElement | null>(null);
   const [phase, setPhase] = useState<DownloadPhase>(
     status.activeDownload?.phase ?? "preparing",
   );
@@ -113,11 +141,18 @@ export function DownloadView({
     setUrl(prefill.url);
     setStartTime(formatTimecode(prefill.startSeconds));
     setEndTime(formatTimecode(prefill.endSeconds));
-    setOutputName(
-      prefill.outputName ??
-        buildDefaultOutputName(prefill.url, prefill.startSeconds, prefill.endSeconds),
-    );
-    setOutputTouched(Boolean(prefill.outputName));
+    const metadata = prefill.filenameMetadata ?? null;
+    setFilenameMetadata(metadata);
+    if (metadata) {
+      setOutputName(loadFilenameTemplate());
+      setOutputTouched(true);
+    } else {
+      setOutputName(
+        prefill.outputName ??
+          buildDefaultOutputName(prefill.url, prefill.startSeconds, prefill.endSeconds),
+      );
+      setOutputTouched(Boolean(prefill.outputName));
+    }
   }, [prefill, status.activeDownload]);
 
   useEffect(() => {
@@ -138,6 +173,7 @@ export function DownloadView({
       setUrl(active.url);
       setStartTime(formatTimecode(active.startSeconds));
       setEndTime(formatTimecode(active.endSeconds));
+      setFilenameMetadata(null);
       setOutputName(active.outputName);
       setOutputTouched(true);
       setFormatPreset(active.formatPreset);
@@ -147,10 +183,17 @@ export function DownloadView({
   useEffect(() => {
     const start = parseTimecode(startTime);
     const end = parseTimecode(endTime);
-    if (!outputTouched && isSupportedYouTubeUrl(url) && start !== null && end !== null && end > start) {
+    if (
+      !filenameMetadata &&
+      !outputTouched &&
+      isSupportedYouTubeUrl(url) &&
+      start !== null &&
+      end !== null &&
+      end > start
+    ) {
       setOutputName(buildDefaultOutputName(url, start, end));
     }
-  }, [url, startTime, endTime, outputTouched]);
+  }, [url, startTime, endTime, filenameMetadata, outputTouched]);
 
   useEffect(() => {
     let active = true;
@@ -213,6 +256,23 @@ export function DownloadView({
     startSeconds !== null && endSeconds !== null && endSeconds > startSeconds
       ? endSeconds - startSeconds
       : null;
+  const resolvedFilename = useMemo(() => {
+    if (!filenameMetadata) {
+      return {
+        outputName: sanitizeOutputName(outputName),
+        unknownTags: [] as string[],
+        hasMalformedTag: false,
+      };
+    }
+    return resolveFilenameTemplate(outputName, {
+      metadata: filenameMetadata,
+      url,
+      startSeconds: startSeconds ?? 0,
+      endSeconds: endSeconds ?? 0,
+    });
+  }, [endSeconds, filenameMetadata, outputName, startSeconds, url]);
+  const actualOutputName = resolvedFilename.outputName;
+  const literalContainsTagSyntax = !filenameMetadata && /[<>]/.test(outputName);
   const toolsReady = Boolean(
     status.tools["yt-dlp"].selected && status.tools.ffmpeg.selected && status.tools.deno.selected,
   );
@@ -223,9 +283,22 @@ export function DownloadView({
     if (startSeconds === null || endSeconds === null) return "時間格式需為 HH:MM:SS";
     if (endSeconds <= startSeconds) return "結束時間必須晚於開始時間";
     if (duration && duration > 21_600) return "單一片段最長為 6 小時";
-    if (!sanitizeOutputName(outputName)) return "請輸入輸出檔名";
+    if (resolvedFilename.unknownTags.length) {
+      return `不支援的檔名標籤：${resolvedFilename.unknownTags.join("、")}`;
+    }
+    if (resolvedFilename.hasMalformedTag) return "檔名標籤格式不完整";
+    if (literalContainsTagSyntax) return "檔名標籤需由歌回資料庫帶入資料後使用";
+    if (!actualOutputName) return "請輸入輸出檔名";
     return null;
-  }, [duration, endSeconds, outputName, startSeconds, url]);
+  }, [
+    actualOutputName,
+    duration,
+    endSeconds,
+    literalContainsTagSyntax,
+    resolvedFilename,
+    startSeconds,
+    url,
+  ]);
 
   const canSubmit =
     toolsReady &&
@@ -234,6 +307,49 @@ export function DownloadView({
     downloadState !== "starting" &&
     downloadState !== "running";
 
+  function persistTemplate(template: string) {
+    if (!filenameMetadata) return;
+    const resolved = resolveFilenameTemplate(template, {
+      metadata: filenameMetadata,
+      url,
+      startSeconds: startSeconds ?? 0,
+      endSeconds: endSeconds ?? 0,
+    });
+    if (
+      template.trim() &&
+      !resolved.unknownTags.length &&
+      !resolved.hasMalformedTag
+    ) {
+      saveFilenameTemplate(template);
+    }
+  }
+
+  function insertFilenameTag(token: string) {
+    const input = filenameInputRef.current;
+    const selectionStart = input?.selectionStart ?? outputName.length;
+    const selectionEnd = input?.selectionEnd ?? selectionStart;
+    const next = `${outputName.slice(0, selectionStart)}${token}${outputName.slice(selectionEnd)}`
+      .slice(0, FILENAME_TEMPLATE_MAX_LENGTH);
+    const cursor = Math.min(
+      selectionStart + token.length,
+      FILENAME_TEMPLATE_MAX_LENGTH,
+    );
+    setOutputTouched(true);
+    setOutputName(next);
+    persistTemplate(next);
+    window.requestAnimationFrame(() => {
+      filenameInputRef.current?.focus();
+      filenameInputRef.current?.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  function resetFilenameTemplate() {
+    setOutputTouched(true);
+    setOutputName(DEFAULT_FILENAME_TEMPLATE);
+    saveFilenameTemplate(DEFAULT_FILENAME_TEMPLATE);
+    window.requestAnimationFrame(() => filenameInputRef.current?.focus());
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (!canSubmit || startSeconds === null || endSeconds === null) return;
@@ -241,7 +357,7 @@ export function DownloadView({
       url: url.trim(),
       startSeconds,
       endSeconds,
-      outputName: sanitizeOutputName(outputName),
+      outputName: actualOutputName,
       formatPreset,
     };
     setDownloadState("starting");
@@ -393,21 +509,72 @@ export function DownloadView({
           </div>
 
           <label className="field full-width">
-            <span>輸出檔名</span>
+            <span>{filenameMetadata ? "輸出檔名格式" : "輸出檔名"}</span>
             <div className="input-shell filename-input">
               <FileVideo2 size={18} />
               <input
+                ref={filenameInputRef}
                 value={outputName}
                 onChange={(event) => {
                   setOutputTouched(true);
                   setOutputName(event.target.value);
                 }}
-                placeholder="oshiclip-videoId-start-end"
-                maxLength={120}
+                onBlur={() => persistTemplate(outputName)}
+                placeholder={
+                  filenameMetadata
+                    ? DEFAULT_FILENAME_TEMPLATE
+                    : "oshiclip-videoId-start-end"
+                }
+                maxLength={
+                  filenameMetadata ? FILENAME_TEMPLATE_MAX_LENGTH : 120
+                }
               />
               <span className="extension">.mp4</span>
             </div>
           </label>
+
+          {filenameMetadata && (
+            <div className="filename-template-panel">
+              <div className="filename-template-tags" aria-label="可用的檔名標籤">
+                <span>插入標籤</span>
+                {FILENAME_TEMPLATE_TAGS.map((tag) => (
+                  <button
+                    type="button"
+                    key={tag.token}
+                    title={`插入 ${tag.label}`}
+                    onClick={() => insertFilenameTag(tag.token)}
+                  >
+                    {tag.token}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="reset"
+                  onClick={resetFilenameTemplate}
+                >
+                  <WandSparkles size={12} /> 預設格式
+                </button>
+              </div>
+              <div
+                className={
+                  resolvedFilename.unknownTags.length ||
+                  resolvedFilename.hasMalformedTag ||
+                  !actualOutputName
+                    ? "filename-template-preview invalid"
+                    : "filename-template-preview"
+                }
+                aria-live="polite"
+              >
+                <span>實際檔名</span>
+                <strong title={actualOutputName ? `${actualOutputName}.mp4` : undefined}>
+                  {actualOutputName
+                    ? `${actualOutputName}.mp4`
+                    : "等待有效的檔名格式"}
+                </strong>
+              </div>
+              <small>格式會保存在本機，從下一首歌帶入時自動沿用。</small>
+            </div>
+          )}
 
           <button
             type="button"
