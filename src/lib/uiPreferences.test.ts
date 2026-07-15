@@ -1,11 +1,16 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   applyUiPreferences,
   DEFAULT_UI_PREFERENCES,
   loadUiPreferences,
+  MINIMUM_UI_FONT_PX,
   parseUiPreferences,
   saveUiPreferences,
+  UI_FONT_SIZES,
+  UI_FONT_SIZE_SCALES,
   UI_PREFERENCES_STORAGE_KEY,
+  uiFontRootPixels,
   type UiPreferenceStorage,
 } from "./uiPreferences";
 
@@ -22,9 +27,51 @@ function createStorage(initialValue: string | null = null) {
 }
 
 describe("UI preferences", () => {
-  it("uses a readable medium font and light theme by default", () => {
+  it("uses the readable medium font and light theme by default", () => {
     expect(parseUiPreferences(null)).toEqual(DEFAULT_UI_PREFERENCES);
     expect(parseUiPreferences("not-json")).toEqual(DEFAULT_UI_PREFERENCES);
+  });
+
+  it("keeps every font preset above 12pt and scales it proportionally", () => {
+    const twelvePointsInCssPixels = 12 * (96 / 72);
+
+    expect(MINIMUM_UI_FONT_PX).toBeGreaterThan(twelvePointsInCssPixels);
+    expect(DEFAULT_UI_PREFERENCES.fontSize).toBe("md");
+    for (const fontSize of UI_FONT_SIZES) {
+      expect(uiFontRootPixels(fontSize)).toBe(
+        MINIMUM_UI_FONT_PX * UI_FONT_SIZE_SCALES[fontSize],
+      );
+      expect(uiFontRootPixels(fontSize)).toBeGreaterThan(
+        twelvePointsInCssPixels,
+      );
+    }
+  });
+
+  it("keeps the stylesheet on the shared readable type scale", () => {
+    const stylesheet = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const directSubRemSizes = [
+      ...stylesheet.matchAll(
+        /(?:font-size|font)\s*:[^;{}]*?\b(0(?:\.\d+)?)rem\b/g,
+      ),
+    ].map((match) => match[0]);
+    const typeScaleRemSizes = [
+      ...stylesheet.matchAll(/--font-[a-z-]+:\s*([\d.]+)rem;/g),
+    ].map((match) => Number(match[1]));
+
+    expect(directSubRemSizes).toEqual([]);
+    expect(typeScaleRemSizes.length).toBeGreaterThan(0);
+    expect(typeScaleRemSizes.every((size) => size >= 1)).toBe(true);
+    for (const fontSize of UI_FONT_SIZES) {
+      const selector = new RegExp(
+        `html\\[data-font-size="${fontSize}"\\] \\{ font-size: ([\\d.]+)px; \\}`,
+      );
+      const configuredPixels = stylesheet.match(selector)?.[1];
+
+      expect(Number(configuredPixels)).toBe(uiFontRootPixels(fontSize));
+    }
   });
 
   it("restores a saved theme and font size", () => {

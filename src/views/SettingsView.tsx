@@ -9,6 +9,9 @@ import {
 } from "lucide-react";
 import {
   DEFAULT_UI_PREFERENCES,
+  UI_FONT_SIZES,
+  UI_FONT_SIZE_SCALES,
+  uiFontRootPixels,
   type UiFontSize,
   type UiPreferences,
   type UiTheme,
@@ -39,17 +42,20 @@ const THEME_OPTIONS: Array<{
   },
 ];
 
-const FONT_SIZE_OPTIONS: Array<{
-  id: UiFontSize;
-  label: string;
-  percent: string;
-}> = [
-  { id: "xs", label: "最小", percent: "100%" },
-  { id: "sm", label: "小", percent: "112.5%" },
-  { id: "md", label: "中", percent: "125%" },
-  { id: "lg", label: "大", percent: "137.5%" },
-  { id: "xl", label: "最大", percent: "150%" },
-];
+const FONT_SIZE_LABELS: Record<UiFontSize, string> = {
+  xs: "最小",
+  sm: "小",
+  md: "中",
+  lg: "大",
+  xl: "最大",
+};
+
+const FONT_SIZE_OPTIONS = UI_FONT_SIZES.map((id) => ({
+  id,
+  label: FONT_SIZE_LABELS[id],
+  percent: `${UI_FONT_SIZE_SCALES[id] * 100}%`,
+  rootPixels: uiFontRootPixels(id),
+}));
 
 export function SettingsView({
   preferences,
@@ -119,7 +125,7 @@ export function SettingsView({
             <span><Type size={19} /></span>
             <div>
               <h2>字體大小</h2>
-              <p>現有介面字級保留為「最小」，其他級距會等比例放大所有文字。</p>
+              <p>「最小」級距從 17 px（12.75 pt）開始，其餘四級會等比例放大整套文字。</p>
             </div>
           </div>
 
@@ -137,9 +143,15 @@ export function SettingsView({
                     onChange({ ...preferences, fontSize: option.id })
                   }
                 >
-                  <span className="font-sample" aria-hidden="true">字</span>
+                  <span
+                    className="font-sample"
+                    style={{ fontSize: `${option.rootPixels}px` }}
+                    aria-hidden="true"
+                  >
+                    字
+                  </span>
                   <strong>{option.label}</strong>
-                  <small>{option.percent}</small>
+                  <small>{option.percent} · 最小 {option.rootPixels}px</small>
                   <span className="choice-check" aria-hidden="true">
                     {selected && <Check size={14} />}
                   </span>
