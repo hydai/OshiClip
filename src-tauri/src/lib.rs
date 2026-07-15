@@ -2,6 +2,7 @@ mod binary_manager;
 mod command_builder;
 mod error;
 mod executor;
+mod external_navigation;
 mod history;
 mod manifest;
 mod models;
@@ -12,6 +13,7 @@ compile_error!("Windows releases currently support only x86_64-pc-windows-msvc")
 
 use std::{path::PathBuf, sync::Mutex};
 use tauri::Manager;
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::CommandChild;
 
 pub(crate) struct ActiveDownload {
@@ -65,6 +67,27 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            let main_window_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .cloned()
+                .ok_or_else(|| std::io::Error::other("missing main window configuration"))?;
+            let app_handle = app.handle().clone();
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &main_window_config)?
+                .on_new_window(move |url, _features| {
+                    if external_navigation::can_open_in_system_browser(&url) {
+                        if let Err(error) = app_handle.opener().open_url(url.as_str(), None::<&str>)
+                        {
+                            eprintln!("failed to open external URL: {error}");
+                        }
+                    }
+                    tauri::webview::NewWindowResponse::Deny
+                })
+                .build()?;
+
             let app_data = app.path().app_data_dir()?;
             let output_directory = app
                 .path()

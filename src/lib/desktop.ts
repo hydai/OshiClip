@@ -28,6 +28,20 @@ const isAppUpdatePreview =
   new URLSearchParams(window.location.search).has("preview-update");
 export const canCheckForAppUpdate = isDesktopRuntime || isAppUpdatePreview;
 
+export async function openExternalUrl(url: string): Promise<void> {
+  if (isDesktopRuntime) {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+    return;
+  }
+
+  const openedWindow = window.open(url, "_blank");
+  if (!openedWindow) {
+    throw new Error("瀏覽器阻擋了新分頁");
+  }
+  openedWindow.opener = null;
+}
+
 const now = new Date().toISOString();
 let browserStatus: AppStatus = {
   tools: {

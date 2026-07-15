@@ -8,6 +8,7 @@ import {
   UserPlus,
   type LucideIcon,
 } from "lucide-react";
+import { openExternalUrl } from "../lib/desktop";
 
 export type OnlineServiceId = "nova" | "aurora" | "prism";
 
@@ -77,11 +78,13 @@ type FrameStatus = "loading" | "ready" | "error";
 
 interface OnlineServiceViewProps {
   service: OnlineService;
+  notify: (message: string, tone?: "info" | "success" | "error") => void;
 }
 
-export function OnlineServiceView({ service }: OnlineServiceViewProps) {
+export function OnlineServiceView({ service, notify }: OnlineServiceViewProps) {
   const [frameKey, setFrameKey] = useState(0);
   const [status, setStatus] = useState<FrameStatus>("loading");
+  const [openingInBrowser, setOpeningInBrowser] = useState(false);
   const Icon = service.icon;
   const titleId = `${service.id}-service-title`;
 
@@ -89,6 +92,19 @@ export function OnlineServiceView({ service }: OnlineServiceViewProps) {
     setStatus("loading");
     setFrameKey((current) => current + 1);
   }, []);
+
+  const openInBrowser = useCallback(async () => {
+    if (openingInBrowser) return;
+    setOpeningInBrowser(true);
+    try {
+      await openExternalUrl(service.url);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      notify(`無法在瀏覽器開啟 ${service.name}：${detail}`, "error");
+    } finally {
+      setOpeningInBrowser(false);
+    }
+  }, [notify, openingInBrowser, service.name, service.url]);
 
   useEffect(() => {
     if (status !== "loading") return;
@@ -129,10 +145,14 @@ export function OnlineServiceView({ service }: OnlineServiceViewProps) {
             <RefreshCw className={status === "loading" ? "spin" : undefined} size={16} />
             重新載入
           </button>
-          <a href={service.url} target="_blank" rel="noopener noreferrer">
-            <ExternalLink size={16} />
-            瀏覽器開啟
-          </a>
+          <button type="button" onClick={openInBrowser} disabled={openingInBrowser}>
+            {openingInBrowser ? (
+              <LoaderCircle className="spin" size={16} />
+            ) : (
+              <ExternalLink size={16} />
+            )}
+            {openingInBrowser ? "正在開啟" : "瀏覽器開啟"}
+          </button>
         </div>
       </header>
 

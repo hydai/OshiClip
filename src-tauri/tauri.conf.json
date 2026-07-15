@@ -19,6 +19,7 @@
         "minWidth": 900,
         "minHeight": 650,
         "center": true,
+        "create": false,
         "resizable": true,
         "fullscreen": false,
         "decorations": true

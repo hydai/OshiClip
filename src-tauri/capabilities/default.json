@@ -7,6 +7,14 @@
     "core:default",
     "deep-link:default",
     "dialog:allow-open",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://nova.oshi.tw/" },
+        { "url": "https://aurora.oshi.tw/" },
+        { "url": "https://prism.oshi.tw/" }
+      ]
+    },
     "process:allow-restart",
     "updater:default"
   ]

@@ -12,6 +12,7 @@ const EXPECTED_SERVICES = [
   ["aurora", "https://aurora.oshi.tw/"],
   ["prism", "https://prism.oshi.tw/"],
 ];
+const notify = () => undefined;
 
 describe("OnlineServiceView", () => {
   it("registers only the canonical HTTPS service origins", () => {
@@ -40,12 +41,36 @@ describe("OnlineServiceView", () => {
   });
 
   it.each(ONLINE_SERVICES)("renders the trusted $name frame and fallback", (service) => {
-    const markup = renderToStaticMarkup(<OnlineServiceView service={service} />);
+    const markup = renderToStaticMarkup(
+      <OnlineServiceView service={service} notify={notify} />,
+    );
 
     expect(markup).toContain(`src="${service.url}"`);
     expect(markup).toContain(`sandbox="${ONLINE_SERVICE_FRAME_SANDBOX}"`);
     expect(markup).toContain(service.frameTitle);
     expect(markup).toContain("瀏覽器開啟");
+    expect(markup).not.toContain('target="_blank"');
+  });
+
+  it("allows the opener command only for the canonical service URLs", () => {
+    const capability = JSON.parse(
+      readFileSync(
+        new URL("../../src-tauri/capabilities/default.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const openerPermission = capability.permissions.find(
+      (permission: unknown) =>
+        typeof permission === "object" &&
+        permission !== null &&
+        "identifier" in permission &&
+        permission.identifier === "opener:allow-open-url",
+    );
+
+    expect(openerPermission).toEqual({
+      identifier: "opener:allow-open-url",
+      allow: EXPECTED_SERVICES.map(([, url]) => ({ url })),
+    });
   });
 
   it("keeps the desktop CSP restricted to the three service origins", () => {
@@ -66,5 +91,10 @@ describe("OnlineServiceView", () => {
       "https://aurora.oshi.tw",
       "https://prism.oshi.tw",
     ]);
+    expect(config.app.windows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "main", create: false }),
+      ]),
+    );
   });
 });

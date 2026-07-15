@@ -477,7 +477,7 @@ export default function App({ initialUiPreferences }: AppProps) {
                   hidden={view !== service.id}
                   key={service.id}
                 >
-                  <OnlineServiceView service={service} />
+                  <OnlineServiceView service={service} notify={notify} />
                 </div>
               ),
           )}
