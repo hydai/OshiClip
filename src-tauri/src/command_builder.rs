@@ -43,9 +43,12 @@ pub fn build_download_args(
         "--output".into(),
         output_template.into_os_string(),
         "--newline".into(),
+        "--progress".into(),
         "--progress-template".into(),
         "download:PROGRESS %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s"
             .into(),
+        "--downloader-args".into(),
+        "ffmpeg_o:-progress pipe:1 -nostats".into(),
         "--print".into(),
         "after_move:FINAL %(filepath)s".into(),
         spec.url.trim().into(),
@@ -143,6 +146,8 @@ mod tests {
         assert!(args.contains(&OsString::from("*4799-4993")));
         assert!(args.contains(&OsString::from("/tools/ffmpeg")));
         assert!(args.contains(&OsString::from("deno:/tools/deno")));
+        assert!(args.contains(&OsString::from("--progress")));
+        assert!(args.contains(&OsString::from("ffmpeg_o:-progress pipe:1 -nostats")));
         assert_eq!(
             args.last(),
             Some(&OsString::from(

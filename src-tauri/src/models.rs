@@ -177,10 +177,14 @@ pub struct AppStatus {
     pub tools: BTreeMap<String, ApiToolState>,
     pub settings: ApiSettings,
     pub active_job_id: Option<String>,
+    pub active_download: Option<ActiveDownloadStatus>,
 }
 
 impl AppStatus {
-    pub fn from_manifest(manifest: &Manifest, active_job_id: Option<String>) -> Self {
+    pub fn from_manifest(
+        manifest: &Manifest,
+        active_download: Option<ActiveDownloadStatus>,
+    ) -> Self {
         let tools = Tool::ALL
             .into_iter()
             .map(|tool| {
@@ -195,7 +199,10 @@ impl AppStatus {
             settings: ApiSettings {
                 output_directory: manifest.settings.output_directory.clone(),
             },
-            active_job_id,
+            active_job_id: active_download
+                .as_ref()
+                .map(|download| download.job_id.clone()),
+            active_download,
         }
     }
 }
@@ -215,6 +222,34 @@ pub struct DownloadSpec {
 pub enum FormatPreset {
     Avc1Mp4a,
     Best,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadPhase {
+    Preparing,
+    Downloading,
+    Finalizing,
+    Waiting,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveDownloadStatus {
+    pub job_id: String,
+    pub url: String,
+    pub start_seconds: u64,
+    pub end_seconds: u64,
+    pub output_name: String,
+    pub output_path: String,
+    pub format_preset: FormatPreset,
+    pub started_at: String,
+    pub phase: DownloadPhase,
+    pub percent: Option<f64>,
+    pub speed: Option<String>,
+    pub eta: Option<String>,
+    pub downloaded_bytes: u64,
+    pub elapsed_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

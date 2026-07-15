@@ -355,8 +355,8 @@ Starting 時：
 | 狀態 | Pill | 主文案 | 中下區內容 | 可用動作 |
 |---|---|---|---|---|
 | idle | 等待開始 | 準備好時，按下開始／下載與剪輯會在這裡顯示 | 三步驟說明 | 展開日誌 |
-| starting | 正在準備 | 正在準備／下載與剪輯會在這裡顯示 | 0% 或初始進度 | Job ID 建立後可取消 |
-| running | 正在下載片段 | 下載與剪輯會在這裡顯示 | 百分比、速度、ETA | 取消下載、展開日誌 |
+| starting | 正在準備 | 正在取得 YouTube 串流資訊 | 動態不確定進度 | Job ID 建立後可取消 |
+| running | 解析影片／下載片段／整理檔案／等待工具回應 | 對應階段的明確說明 | 百分比或動態進度、已寫入大小、速度、ETA／耗時 | 取消下載、展開日誌 |
 | completed | 片段已完成 | 你的片段已經準備好了 | 檔名與安全儲存提示 | 在檔案總管中顯示 |
 | error | 任務未完成 | 後端錯誤訊息 | 保留當下進度 | 返回並重新檢查、展開日誌 |
 
@@ -368,12 +368,11 @@ Starting 時：
 
 ### 6.4 Running 資訊
 
-- 百分比：0–100，圓形與線性進度同步。
-- 速度：例如 `5.20 MiB/s`；未知時顯示「計算中」。
-- ETA：例如「剩餘 00:12」；未知時顯示「計算中」。
+- ffmpeg 以 `-progress pipe:1` 回傳機器可讀的時間軸；可計算時，百分比為 0–99.9，程序成功結束後才切到 100。
+- 尚未取得可量測進度時，圓形與線性進度改為動態不確定狀態，不顯示假性的 0%。
+- 顯示 `.part` 已寫入大小、處理／傳輸速度，以及 ETA；ETA 未知時改顯示已執行時間。
+- 後端每秒發出任務快照 heartbeat。連續 30 秒沒有程序輸出或檔案成長時，階段改為「等待工具回應」，恢復後自動回到原階段。
 - Cancel：紅色次要危險按鈕「取消下載」。
-
-目前百分比主要來自 yt-dlp 的下載階段；ffmpeg 合併／收尾未拆成獨立視覺階段，因此可能在接近完成時暫停於某個百分比，直到整個程序結束。
 
 ### 6.5 Completed
 
@@ -568,15 +567,17 @@ UI 安裝階段：
 
 ### 8.1 頁面目的
 
-集中呈現成功完成的片段。紀錄只保存在使用者本機，最多保留最新 500 筆；失敗或取消的任務不會寫入。清除紀錄或移除單筆只修改 `history.json`，不會刪除影片檔案。
+集中呈現目前進行中的任務與成功完成的片段。進行中任務來自記憶體內的 active snapshot；完成紀錄保存在使用者本機，最多保留最新 500 筆。失敗或取消的任務不會寫入，清除紀錄或移除單筆也不會刪除影片檔案。
 
 ### 8.2 頁面結構
 
 頁首下方依序為：
 
-1. 摘要列：完成紀錄數、檔案仍存在的數量、紀錄檔案總大小。
+1. 摘要列：進行中／完成數、檔案仍存在的數量、紀錄檔案總大小。
 2. 工具列：重新整理、清空紀錄。
-3. 依完成時間由新到舊排列的紀錄卡。
+3. 進行中任務卡（若有），其後為依完成時間由新到舊排列的紀錄卡。
+
+進行中任務卡顯示目前階段、起訖區間、已寫入大小、已執行時間、百分比或動態進度，並提供「查看任務」回到下載頁。切換分頁不會中斷任務或遺失狀態。
 
 每張紀錄卡顯示：
 
@@ -802,6 +803,24 @@ interface AppStatus {
     outputDirectory: string;
   };
   activeJobId: string | null;
+  activeDownload: ActiveDownloadStatus | null;
+}
+
+interface ActiveDownloadStatus {
+  jobId: string;
+  url: string;
+  startSeconds: number;
+  endSeconds: number;
+  outputName: string;
+  outputPath: string;
+  formatPreset: "avc1_mp4a" | "best";
+  startedAt: string;
+  phase: "preparing" | "downloading" | "finalizing" | "waiting";
+  percent: number | null;
+  speed: string | null;
+  eta: string | null;
+  downloadedBytes: number;
+  elapsedSeconds: number;
 }
 
 interface UiPreferences {
@@ -864,7 +883,7 @@ interface DownloadHistoryEntry {
 
 | Event | UI 消費位置 | 影響 |
 |---|---|---|
-| download-progress | 任務狀態卡 | 更新 job、百分比、速度、ETA |
+| download-progress | App、任務狀態卡、下載紀錄頁 | 更新完整 active snapshot：階段、百分比、已寫入大小、速度、ETA 與耗時 |
 | download-log | 任務狀態卡 | 加入日誌，最多保留 200 行 |
 | download-done | 任務狀態卡／Toast | 切換 completed、保存輸出路徑、刷新 status |
 | download-error | 任務狀態卡／Toast | 切換 error、顯示錯誤、刷新 status |
@@ -1014,7 +1033,7 @@ Inter → system UI → Segoe UI → Noto Sans TC → PingFang TC
 | 首次工具安裝 | 使用者進工具頁後逐一安裝三個技術工具 | 是否改成「準備下載環境」單一 CTA，由進階區再揭露三工具？ |
 | 技術透明度 | yt-dlp、ffmpeg、Deno 都是第一層資訊 | 一般使用者是否需要理解工具名稱，或只需知道「下載環境已就緒」？ |
 | Disabled CTA | 未就緒／表單不完整都只呈現 disabled | 是否在 CTA 附近顯示單一、可行動的阻擋原因？ |
-| 進度心智模型 | 主要只有 yt-dlp 百分比 | 是否改為「準備 → 下載 → 合併 → 完成」階段式進度，避免 90% 停留？ |
+| 進度心智模型 | 已提供「解析 → 下載 → 整理 → 完成」與等待恢復狀態 | 是否還需要對進階使用者揭露各工具名稱？ |
 | 安裝並行 | 其他工具卡可能仍可點擊，但後端會排隊 | 是否全頁鎖定、允許 queue，或每張卡獨立顯示等待中？ |
 | 安裝／下載錯誤 | Toast + 技術日誌，卡片無持久錯誤 | 是否提供錯誤摘要、建議動作與一鍵重試？ |
 | 移除版本 | 點垃圾桶立即移除 | 是否需要確認、Undo，或只在進階管理模式開放？ |

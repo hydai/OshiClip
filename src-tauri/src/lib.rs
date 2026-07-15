@@ -18,6 +18,7 @@ pub(crate) struct ActiveDownload {
     pub job_id: String,
     pub child: Option<CommandChild>,
     pub cancelled: bool,
+    pub status: models::ActiveDownloadStatus,
 }
 
 pub(crate) struct AppState {

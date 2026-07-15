@@ -23,22 +23,31 @@ import {
   revealHistoryOutput,
 } from "../lib/desktop";
 import {
+  downloadPhaseDescription,
+  downloadPhaseLabel,
+  formatElapsedTime,
+} from "../lib/downloadActivity";
+import {
   formatHistoryBytes,
   formatHistoryDate,
   historyFileName,
 } from "../lib/history";
 import { formatDuration, formatTimecode } from "../lib/time";
-import type { DownloadHistoryEntry } from "../types";
+import type { ActiveDownloadStatus, DownloadHistoryEntry } from "../types";
 
 interface HistoryViewProps {
+  activeDownload: ActiveDownloadStatus | null;
   onReuse: (entry: DownloadHistoryEntry) => void;
   onStartDownload: () => void;
+  onViewActive: () => void;
   notify: (message: string, tone?: "success" | "error" | "info") => void;
 }
 
 export function HistoryView({
+  activeDownload,
   onReuse,
   onStartDownload,
+  onViewActive,
   notify,
 }: HistoryViewProps) {
   const [entries, setEntries] = useState<DownloadHistoryEntry[]>([]);
@@ -154,8 +163,10 @@ export function HistoryView({
 
       <div className="history-summary">
         <div>
-          <span className="summary-icon violet"><History size={18} /></span>
-          <p><small>完成紀錄</small><strong>{entries.length}</strong></p>
+          <span className="summary-icon violet">
+            {activeDownload ? <LoaderCircle className="spin" size={18} /> : <History size={18} />}
+          </span>
+          <p><small>進行中 / 完成</small><strong>{activeDownload ? 1 : 0} / {entries.length}</strong></p>
         </div>
         <div>
           <span className="summary-icon mint"><HardDrive size={18} /></span>
@@ -186,12 +197,12 @@ export function HistoryView({
         </div>
       </div>
 
-      {loading && entries.length === 0 ? (
+      {loading && entries.length === 0 && !activeDownload ? (
         <div className="history-state-card">
           <LoaderCircle className="spin" size={26} />
           <strong>正在讀取下載紀錄…</strong>
         </div>
-      ) : error ? (
+      ) : error && !activeDownload ? (
         <div className="history-state-card error">
           <AlertCircle size={27} />
           <strong>無法讀取下載紀錄</strong>
@@ -200,7 +211,7 @@ export function HistoryView({
             再試一次
           </button>
         </div>
-      ) : entries.length === 0 ? (
+      ) : entries.length === 0 && !activeDownload ? (
         <div className="history-state-card empty">
           <span><Scissors size={29} /></span>
           <strong>還沒有完成的片段</strong>
@@ -211,6 +222,64 @@ export function HistoryView({
         </div>
       ) : (
         <div className="history-list" aria-busy={loading}>
+          {activeDownload && (() => {
+            const duration = Math.max(
+              0,
+              activeDownload.endSeconds - activeDownload.startSeconds,
+            );
+            const fileName = historyFileName(
+              activeDownload.outputPath,
+              activeDownload.outputName,
+            );
+            const hasMeasuredProgress =
+              activeDownload.percent !== null && activeDownload.percent > 0;
+            return (
+              <article className="history-card active" key={activeDownload.jobId} aria-live="polite">
+                <div className="history-file-mark active">
+                  <LoaderCircle className="spin" size={24} />
+                </div>
+                <div className="history-card-main">
+                  <div className="history-title-row">
+                    <div>
+                      <h2 title={fileName}>{fileName}</h2>
+                      <span className="file-status active">
+                        {downloadPhaseLabel(activeDownload.phase)}
+                      </span>
+                    </div>
+                    <time dateTime={activeDownload.startedAt}>
+                      {formatHistoryDate(activeDownload.startedAt)} 開始
+                    </time>
+                  </div>
+                  <p className="history-active-description">
+                    {downloadPhaseDescription(activeDownload.phase)}
+                  </p>
+                  <div className="history-metadata">
+                    <span><Clock3 size={13} /> {formatTimecode(activeDownload.startSeconds)} → {formatTimecode(activeDownload.endSeconds)}</span>
+                    <span><Scissors size={13} /> {formatDuration(duration)}</span>
+                    <span><FileVideo2 size={13} /> {activeDownload.formatPreset === "avc1_mp4a" ? "相容 MP4" : "最佳品質"}</span>
+                    <span><HardDrive size={13} /> {activeDownload.downloadedBytes > 0 ? `已寫入 ${formatHistoryBytes(activeDownload.downloadedBytes)}` : "正在建立檔案"}</span>
+                    <span><Clock3 size={13} /> 已執行 {formatElapsedTime(activeDownload.elapsedSeconds)}</span>
+                  </div>
+                  <div className="history-active-progress">
+                    <div className={hasMeasuredProgress ? "" : "indeterminate"}>
+                      <span style={{ width: `${activeDownload.percent ?? 0}%` }} />
+                    </div>
+                    <strong>{hasMeasuredProgress ? `${Math.round(activeDownload.percent!)}%` : "處理中"}</strong>
+                  </div>
+                  <div className="history-source" title={activeDownload.url}>
+                    <Link2 size={13} />
+                    <span>{activeDownload.url}</span>
+                  </div>
+                  <p className="history-path" title={activeDownload.outputPath}>{activeDownload.outputPath}</p>
+                </div>
+                <div className="history-actions active">
+                  <button className="button mint" type="button" onClick={onViewActive}>
+                    查看任務
+                  </button>
+                </div>
+              </article>
+            );
+          })()}
           {entries.map((entry) => {
             const duration = Math.max(0, entry.endSeconds - entry.startSeconds);
             const fileName = historyFileName(entry.outputPath, entry.outputName);

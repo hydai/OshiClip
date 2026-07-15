@@ -10,6 +10,7 @@ import {
   FileVideo2,
   FolderOpen,
   Gauge,
+  HardDrive,
   Link2,
   ListVideo,
   LoaderCircle,
@@ -26,6 +27,12 @@ import {
   startDownload,
 } from "../lib/desktop";
 import {
+  downloadPhaseDescription,
+  downloadPhaseLabel,
+  formatElapsedTime,
+} from "../lib/downloadActivity";
+import { formatHistoryBytes } from "../lib/history";
+import {
   buildDefaultOutputName,
   formatDuration,
   formatTimecode,
@@ -33,7 +40,13 @@ import {
   parseTimecode,
   sanitizeOutputName,
 } from "../lib/time";
-import type { AppStatus, DownloadPrefill, DownloadSpec, FormatPreset } from "../types";
+import type {
+  AppStatus,
+  DownloadPhase,
+  DownloadPrefill,
+  DownloadSpec,
+  FormatPreset,
+} from "../types";
 
 type DownloadState = "idle" | "starting" | "running" | "completed" | "error";
 
@@ -59,27 +72,44 @@ export function DownloadView({
   onStatusChange,
   notify,
 }: DownloadViewProps) {
-  const initial = "__TAURI_INTERNALS__" in window ? null : PREVIEW_PREFILL;
+  const initial =
+    status.activeDownload ??
+    ("__TAURI_INTERNALS__" in window ? null : PREVIEW_PREFILL);
   const [url, setUrl] = useState(initial?.url ?? "");
   const [startTime, setStartTime] = useState(formatTimecode(initial?.startSeconds ?? 0));
   const [endTime, setEndTime] = useState(formatTimecode(initial?.endSeconds ?? 90));
   const [outputName, setOutputName] = useState(initial?.outputName ?? "");
-  const [formatPreset, setFormatPreset] = useState<FormatPreset>("avc1_mp4a");
+  const [formatPreset, setFormatPreset] = useState<FormatPreset>(
+    status.activeDownload?.formatPreset ?? "avc1_mp4a",
+  );
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [outputTouched, setOutputTouched] = useState(Boolean(initial?.outputName));
-  const [downloadState, setDownloadState] = useState<DownloadState>("idle");
+  const [downloadState, setDownloadState] = useState<DownloadState>(
+    status.activeDownload ? "running" : "idle",
+  );
   const [jobId, setJobId] = useState<string | null>(status.activeJobId);
   const jobIdRef = useRef<string | null>(status.activeJobId);
-  const [progress, setProgress] = useState(0);
-  const [speed, setSpeed] = useState<string | null>(null);
-  const [eta, setEta] = useState<string | null>(null);
+  const [phase, setPhase] = useState<DownloadPhase>(
+    status.activeDownload?.phase ?? "preparing",
+  );
+  const [progress, setProgress] = useState<number | null>(
+    status.activeDownload?.percent ?? null,
+  );
+  const [speed, setSpeed] = useState<string | null>(status.activeDownload?.speed ?? null);
+  const [eta, setEta] = useState<string | null>(status.activeDownload?.eta ?? null);
+  const [downloadedBytes, setDownloadedBytes] = useState(
+    status.activeDownload?.downloadedBytes ?? 0,
+  );
+  const [elapsedSeconds, setElapsedSeconds] = useState(
+    status.activeDownload?.elapsedSeconds ?? 0,
+  );
   const [logs, setLogs] = useState<string[]>([]);
   const [logsOpen, setLogsOpen] = useState(false);
   const [resultPath, setResultPath] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!prefill) return;
+    if (!prefill || status.activeDownload) return;
     setUrl(prefill.url);
     setStartTime(formatTimecode(prefill.startSeconds));
     setEndTime(formatTimecode(prefill.endSeconds));
@@ -88,7 +118,31 @@ export function DownloadView({
         buildDefaultOutputName(prefill.url, prefill.startSeconds, prefill.endSeconds),
     );
     setOutputTouched(Boolean(prefill.outputName));
-  }, [prefill]);
+  }, [prefill, status.activeDownload]);
+
+  useEffect(() => {
+    const active = status.activeDownload;
+    if (!active) return;
+    const isNewJob = jobIdRef.current !== active.jobId;
+    jobIdRef.current = active.jobId;
+    setJobId(active.jobId);
+    setDownloadState("running");
+    setPhase(active.phase);
+    setProgress(active.percent);
+    setSpeed(active.speed);
+    setEta(active.eta);
+    setDownloadedBytes(active.downloadedBytes);
+    setElapsedSeconds(active.elapsedSeconds);
+    setResultPath(active.outputPath);
+    if (isNewJob) {
+      setUrl(active.url);
+      setStartTime(formatTimecode(active.startSeconds));
+      setEndTime(formatTimecode(active.endSeconds));
+      setOutputName(active.outputName);
+      setOutputTouched(true);
+      setFormatPreset(active.formatPreset);
+    }
+  }, [status.activeDownload]);
 
   useEffect(() => {
     const start = parseTimecode(startTime);
@@ -99,6 +153,7 @@ export function DownloadView({
   }, [url, startTime, endTime, outputTouched]);
 
   useEffect(() => {
+    let active = true;
     const disposers: Array<() => void> = [];
     void Promise.all([
       onDesktopEvent("download-progress", (event) => {
@@ -106,9 +161,17 @@ export function DownloadView({
         jobIdRef.current = event.jobId;
         setJobId(event.jobId);
         setDownloadState("running");
-        setProgress(Math.max(0, Math.min(100, event.percent)));
+        setPhase(event.phase);
+        setProgress(
+          event.percent === null
+            ? null
+            : Math.max(0, Math.min(100, event.percent)),
+        );
         setSpeed(event.speed);
         setEta(event.eta);
+        setDownloadedBytes(event.downloadedBytes);
+        setElapsedSeconds(event.elapsedSeconds);
+        setResultPath(event.outputPath);
       }),
       onDesktopEvent("download-log", (event) => {
         if (jobIdRef.current && event.jobId !== jobIdRef.current) return;
@@ -118,6 +181,7 @@ export function DownloadView({
         if (jobIdRef.current && event.jobId !== jobIdRef.current) return;
         setDownloadState("completed");
         setProgress(100);
+        setPhase("finalizing");
         setResultPath(event.outputPath);
         jobIdRef.current = null;
         setJobId(null);
@@ -133,8 +197,14 @@ export function DownloadView({
         notify(event.message, "error");
         void onStatusChange();
       }),
-    ]).then((unlisteners) => disposers.push(...unlisteners));
-    return () => disposers.forEach((dispose) => dispose());
+    ]).then((unlisteners) => {
+      if (active) disposers.push(...unlisteners);
+      else unlisteners.forEach((dispose) => dispose());
+    });
+    return () => {
+      active = false;
+      disposers.forEach((dispose) => dispose());
+    };
   }, [notify, onStatusChange]);
 
   const startSeconds = parseTimecode(startTime);
@@ -175,7 +245,12 @@ export function DownloadView({
       formatPreset,
     };
     setDownloadState("starting");
-    setProgress(0);
+    setPhase("preparing");
+    setProgress(null);
+    setSpeed(null);
+    setEta(null);
+    setDownloadedBytes(0);
+    setElapsedSeconds(0);
     setLogs([]);
     setResultPath(null);
     setErrorMessage(null);
@@ -206,10 +281,23 @@ export function DownloadView({
   const stateLabel = {
     idle: "等待開始",
     starting: "正在準備",
-    running: "正在下載片段",
+    running: downloadPhaseLabel(phase),
     completed: "片段已完成",
     error: "任務未完成",
   }[downloadState];
+  const isWorking = downloadState === "running" || downloadState === "starting";
+  const hasMeasuredProgress = progress !== null && progress > 0;
+  const displayedProgress = progress ?? 0;
+  const progressDescription =
+    downloadState === "completed"
+      ? "你的片段已經準備好了"
+      : downloadState === "error"
+        ? errorMessage
+        : downloadState === "running"
+          ? downloadPhaseDescription(phase)
+          : downloadState === "starting"
+            ? downloadPhaseDescription("preparing")
+            : "下載與剪輯會在這裡顯示";
 
   return (
     <section className="download-view">
@@ -382,24 +470,39 @@ export function DownloadView({
           </div>
 
           <div className="progress-visual">
-            <div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}>
+            <div
+              className={isWorking && !hasMeasuredProgress ? "progress-ring indeterminate" : "progress-ring"}
+              style={{ "--progress": `${displayedProgress * 3.6}deg` } as React.CSSProperties}
+            >
               <div>
-                {downloadState === "completed" ? <Check size={30} /> : <strong>{Math.round(progress)}<small>%</small></strong>}
+                {downloadState === "completed" ? (
+                  <Check size={30} />
+                ) : isWorking && !hasMeasuredProgress ? (
+                  <LoaderCircle className="spin" size={28} />
+                ) : (
+                  <strong>{Math.round(displayedProgress)}<small>%</small></strong>
+                )}
               </div>
             </div>
             <div className="progress-copy">
               <span>{downloadState === "idle" ? "準備好時，按下開始" : stateLabel}</span>
-              <strong>{downloadState === "completed" ? "你的片段已經準備好了" : downloadState === "error" ? errorMessage : "下載與剪輯會在這裡顯示"}</strong>
-              {downloadState === "running" && (
+              <strong>{progressDescription}</strong>
+              {isWorking && (
                 <div className="transfer-stats">
-                  <span><Gauge size={14} /> {speed ?? "計算中"}</span>
-                  <span><Clock3 size={14} /> {eta ? `剩餘 ${eta}` : "計算中"}</span>
+                  <span>
+                    <HardDrive size={14} />
+                    {downloadedBytes > 0 ? `已寫入 ${formatHistoryBytes(downloadedBytes)}` : "正在建立連線"}
+                  </span>
+                  {speed && <span><Gauge size={14} /> {speed.endsWith("x") ? `處理速度 ${speed}` : speed}</span>}
+                  <span><Clock3 size={14} /> {eta ? `約剩 ${eta}` : `已執行 ${formatElapsedTime(elapsedSeconds)}`}</span>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="progress-bar"><span style={{ width: `${progress}%` }} /></div>
+          <div className={isWorking && !hasMeasuredProgress ? "progress-bar indeterminate" : "progress-bar"}>
+            <span style={{ width: `${displayedProgress}%` }} />
+          </div>
 
           {downloadState === "idle" && (
             <div className="empty-steps">

@@ -48,7 +48,7 @@
 | 編號 | 需求 |
 |---|---|
 | FR-1 | 使用者可輸入 YouTube URL、起訖時間、輸出檔名，執行片段下載。 |
-| FR-2 | 顯示即時下載進度（百分比、速度、ETA）。 |
+| FR-2 | 顯示即時下載階段、百分比或動態進度、已寫入大小、速度、ETA／耗時與等待回應狀態。 |
 | FR-3 | 首次啟動時偵測工具是否就緒，若無則引導下載 yt-dlp / ffmpeg / Deno。 |
 | FR-4 | 設定頁可列出已安裝版本、檢查更新、切換 selected 版本、移除舊版。 |
 | FR-5 | 下載任一二進位後，驗證 SHA256 一致才視為安裝成功。 |
@@ -56,6 +56,7 @@
 | FR-7 | 完成後可一鍵開啟輸出檔所在資料夾。 |
 | FR-8 |（進階）承接來自 `vods.oshi.tw` 的深層連結參數並自動帶入表單。 |
 | FR-9 | 直接讀取 `data.oshi.tw` VOD v1 feed，提供搜尋、VTuber 篩選、VOD 歌曲時間軸與下載預填。 |
+| FR-10 | 下載紀錄頁置頂顯示進行中任務，切換分頁後仍可觀察並返回任務。 |
 
 ### 2.2 非功能需求（Non-Functional Requirements）
 
@@ -185,9 +186,10 @@ sequenceDiagram
     CB->>EE: spawn(ytdlp_path, argv, ffmpeg_dir)
     EE->>YT: 執行（傳 argv，不經 shell）
     loop 下載中
-        YT-->>EE: stdout 進度行（--progress-template）
-        EE-->>FE: emit("download-progress", {pct, speed, eta})
-        FE-->>U: 更新進度條
+        YT-->>EE: yt-dlp PROGRESS 或 ffmpeg key=value 進度
+        EE->>EE: 更新 active snapshot；每秒 heartbeat／30 秒等待偵測
+        EE-->>FE: emit("download-progress", activeSnapshot)
+        FE-->>U: 更新下載頁與下載紀錄頁
     end
     YT-->>EE: exit code
     EE-->>FE: emit("download-done" / "download-error")
@@ -383,7 +385,10 @@ let (mut rx, child) = app.shell()
         "--js-runtimes", &format!("deno:{}", deno.display()),
         "--output", &output_template,
         "--newline",                                        // 進度逐行輸出，便於解析
+        "--progress",                                       // --print 隱含 quiet，明確重新啟用進度
         "--progress-template", "download:PROGRESS %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s",
+        "--downloader-args", "ffmpeg_o:-progress pipe:1 -nostats",
+        "--print", "after_move:FINAL %(filepath)s",
         &url,
     ])
     .spawn()?;
@@ -398,30 +403,25 @@ let (mut rx, child) = app.shell()
 
 ### 7.2 進度解析與事件
 
-以 `--progress-template` 自訂輸出格式（而非硬解析預設的 `[download] xx.x%`），可避免 yt-dlp 改版動到輸出格式：
+yt-dlp 原生下載以 `--progress-template` 自訂輸出；`--download-sections` 委派給 ffmpeg 時，則以 `-progress pipe:1` 取得 `key=value` 時間軸。Execution Engine 會緩衝可能被切斷的 UTF-8 行、把 `out_time_us / clip_duration` 轉成百分比，並將完整 active snapshot 寫入記憶體與送往前端。
+
+另外每秒會送出 heartbeat 並觀察 `.part` 大小。若 30 秒沒有程序輸出或檔案成長，只把階段標記為 `waiting` 並提示使用者，保留取消與自行恢復的機會，不會武斷終止慢速下載。成功 exit 前百分比上限為 99.9，避免把尚未完成的 remux 誤報為完成。
+
+yt-dlp 標準進度的解析格式如下：
 
 ```rust
 use tauri_plugin_shell::process::CommandEvent;
 
 while let Some(event) = rx.recv().await {
     match event {
-        CommandEvent::Stdout(line) => {
-            let s = String::from_utf8_lossy(&line);
-            if let Some(rest) = s.strip_prefix("PROGRESS ") {
-                // rest = "42.3% 5.20MiB/s 00:12"
-                let mut it = rest.split_whitespace();
-                let payload = serde_json::json!({
-                    "percent": it.next(),
-                    "speed":   it.next(),
-                    "eta":     it.next(),
-                });
-                app.emit("download-progress", payload)?;
-            }
-        }
-        CommandEvent::Stderr(line) => {
-            // 保留完整 stderr 供日誌 / 除錯面板
-            app.emit("download-log", String::from_utf8_lossy(&line).to_string())?;
-        }
+        CommandEvent::Stdout(bytes) => for line in stdout_decoder.push(&bytes) {
+            // 可解析 PROGRESS，或累積 ffmpeg key=value 到 progress=end。
+            update_active_snapshot_and_emit(line)?;
+        },
+        CommandEvent::Stderr(bytes) => for line in stderr_decoder.push(&bytes) {
+            // yt-dlp 可能把 PROGRESS 寫到 stderr；其餘內容保留在日誌。
+            parse_progress_or_emit_log(line)?;
+        },
         CommandEvent::Terminated(payload) => {
             let ok = payload.code == Some(0);
             app.emit(if ok { "download-done" } else { "download-error" }, payload.code)?;

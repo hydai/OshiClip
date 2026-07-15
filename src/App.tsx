@@ -22,6 +22,7 @@ import {
   checkForAppUpdate,
   getAppStatus,
   isDesktopRuntime,
+  onDesktopEvent,
   subscribeToDeepLinks,
 } from "./lib/desktop";
 import { parseDownloadDeepLink } from "./lib/deepLink";
@@ -53,6 +54,7 @@ const EMPTY_STATUS: AppStatus = {
   },
   settings: { outputDirectory: "" },
   activeJobId: null,
+  activeDownload: null,
 };
 
 export default function App({ initialUiPreferences }: AppProps) {
@@ -88,6 +90,43 @@ export default function App({ initialUiPreferences }: AppProps) {
 
   useEffect(() => {
     void refreshStatus();
+  }, [refreshStatus]);
+
+  useEffect(() => {
+    let active = true;
+    const disposers: Array<() => void> = [];
+    void Promise.all([
+      onDesktopEvent("download-progress", (download) => {
+        setStatus((current) => ({
+          ...current,
+          activeJobId: download.jobId,
+          activeDownload: download,
+        }));
+      }),
+      onDesktopEvent("download-done", () => {
+        setStatus((current) => ({
+          ...current,
+          activeJobId: null,
+          activeDownload: null,
+        }));
+        void refreshStatus();
+      }),
+      onDesktopEvent("download-error", () => {
+        setStatus((current) => ({
+          ...current,
+          activeJobId: null,
+          activeDownload: null,
+        }));
+        void refreshStatus();
+      }),
+    ]).then((unlisteners) => {
+      if (active) disposers.push(...unlisteners);
+      else unlisteners.forEach((dispose) => dispose());
+    });
+    return () => {
+      active = false;
+      disposers.forEach((dispose) => dispose());
+    };
   }, [refreshStatus]);
 
   const checkForUpdates = useCallback(
@@ -286,8 +325,10 @@ export default function App({ initialUiPreferences }: AppProps) {
           )}
           {view === "history" && (
             <HistoryView
+              activeDownload={status.activeDownload}
               onReuse={reuseHistoryEntry}
               onStartDownload={() => setView("download")}
+              onViewActive={() => setView("download")}
               notify={notify}
             />
           )}

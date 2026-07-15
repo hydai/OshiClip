@@ -795,6 +795,13 @@ summary:focus-visible {
   background: conic-gradient(var(--mint) var(--progress), rgb(255 255 255 / 8%) 0);
 }
 
+.progress-ring.indeterminate {
+  --progress: 92deg !important;
+  animation: activity-ring 1.35s linear infinite;
+}
+
+.progress-ring.indeterminate > div { animation: activity-ring-counter 1.35s linear infinite; }
+
 .progress-ring > div {
   display: grid;
   place-items: center;
@@ -823,6 +830,10 @@ summary:focus-visible {
 }
 
 .progress-bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--violet), var(--mint)); transition: width 300ms ease; }
+.progress-bar.indeterminate span {
+  width: 38% !important;
+  animation: update-indeterminate 1.35s ease-in-out infinite;
+}
 
 .empty-steps {
   display: grid;
@@ -1390,6 +1401,11 @@ summary:focus-visible {
 }
 
 .history-card.missing { background: rgb(255 255 255 / 62%); }
+.history-card.active {
+  border-color: #a9dcca;
+  background: linear-gradient(110deg, rgb(236 251 245 / 92%), var(--white) 48%);
+  box-shadow: 0 14px 36px rgb(48 139 105 / 11%);
+}
 
 .history-file-mark {
   display: grid;
@@ -1402,6 +1418,7 @@ summary:focus-visible {
 }
 
 .history-card.missing .history-file-mark { color: #9a6d45; background: #fff2e4; }
+.history-file-mark.active { color: #237b5c; background: #dff7ed; }
 .history-card-main { min-width: 0; }
 
 .history-title-row {
@@ -1425,6 +1442,14 @@ summary:focus-visible {
 
 .file-status.available { color: #2f8264; background: #e9f8f2; }
 .file-status.missing { color: #996533; background: #fff0df; }
+.file-status.active { color: #246f55; background: #dff7ed; }
+
+.history-active-description {
+  margin: 7px 0 0;
+  color: #56776b;
+  font-size: 0.5rem;
+  line-height: 1.5;
+}
 
 .history-metadata {
   display: flex;
@@ -1457,6 +1482,42 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
+.history-active-progress {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  margin-top: 9px;
+}
+
+.history-active-progress > div {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dce9e4;
+}
+
+.history-active-progress > div span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7779d1, #5fc69e);
+  transition: width 300ms ease;
+}
+
+.history-active-progress > div.indeterminate span {
+  width: 38% !important;
+  animation: update-indeterminate 1.35s ease-in-out infinite;
+}
+
+.history-active-progress > strong {
+  min-width: 40px;
+  color: #388269;
+  font-size: 0.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .history-actions {
   display: grid;
   grid-template-columns: 1fr 1fr 31px;
@@ -1465,6 +1526,7 @@ summary:focus-visible {
 }
 
 .history-actions .button { min-height: 32px; padding-inline: 10px; font-size: 0.5rem; }
+.history-actions.active { grid-template-columns: 1fr; min-width: 94px; }
 .history-delete {
   display: grid;
   place-items: center;
@@ -1888,10 +1950,19 @@ html[data-theme="dark"] .settings-card-heading > span { color: #b1b3ff; backgrou
 html[data-theme="dark"] .summary-icon.mint { color: #78d3b0; background: #1d3b33; }
 html[data-theme="dark"] .summary-icon.coral { color: #ffab9e; background: #472b2a; }
 html[data-theme="dark"] .history-card:hover { border-color: #4a5568; }
+html[data-theme="dark"] .history-card.active {
+  border-color: #376c5b;
+  background: linear-gradient(110deg, rgb(25 59 49 / 88%), #192131 52%);
+}
 html[data-theme="dark"] .history-card.missing,
 html[data-theme="dark"] .history-state-card { background: rgb(25 33 49 / 78%); }
 html[data-theme="dark"] .file-status.available { color: #82d2b3; background: #1b382f; }
 html[data-theme="dark"] .file-status.missing { color: #e7b47a; background: #3b2c1f; }
+html[data-theme="dark"] .file-status.active,
+html[data-theme="dark"] .history-file-mark.active { color: #83d3b4; background: #1d4035; }
+html[data-theme="dark"] .history-active-description { color: #91b3a6; }
+html[data-theme="dark"] .history-active-progress > div { background: #30463f; }
+html[data-theme="dark"] .history-active-progress > strong { color: #83d3b4; }
 html[data-theme="dark"] .history-card.missing .history-file-mark { color: #e1ad74; background: #3c2d20; }
 html[data-theme="dark"] .history-heading-mark,
 html[data-theme="dark"] .settings-heading-mark,
@@ -2070,6 +2141,8 @@ html[data-theme="dark"] .update-error { color: #ffadb1; border-color: #67434a; b
   from { transform: translateX(-110%); }
   to { transform: translateX(300%); }
 }
+@keyframes activity-ring { to { transform: rotate(360deg); } }
+@keyframes activity-ring-counter { to { transform: rotate(-360deg); } }
 
 .toast-stack {
   position: fixed;

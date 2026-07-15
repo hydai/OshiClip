@@ -23,6 +23,7 @@ export interface AppStatus {
   tools: Record<ToolName, ToolState>;
   settings: AppSettings;
   activeJobId: string | null;
+  activeDownload: ActiveDownloadStatus | null;
 }
 
 export interface AvailableRelease {
@@ -109,6 +110,24 @@ export interface DownloadJob {
   outputPath: string;
 }
 
+export type DownloadPhase =
+  | "preparing"
+  | "downloading"
+  | "finalizing"
+  | "waiting";
+
+export interface ActiveDownloadStatus extends DownloadSpec {
+  jobId: string;
+  outputPath: string;
+  startedAt: string;
+  phase: DownloadPhase;
+  percent: number | null;
+  speed: string | null;
+  eta: string | null;
+  downloadedBytes: number;
+  elapsedSeconds: number;
+}
+
 export interface DownloadHistoryEntry {
   id: string;
   url: string;
@@ -122,12 +141,7 @@ export interface DownloadHistoryEntry {
   fileExists: boolean;
 }
 
-export interface DownloadProgressEvent {
-  jobId: string;
-  percent: number;
-  speed: string | null;
-  eta: string | null;
-}
+export type DownloadProgressEvent = ActiveDownloadStatus;
 
 export interface DownloadLogEvent {
   jobId: string;

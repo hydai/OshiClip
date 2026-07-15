@@ -75,6 +75,7 @@ let browserStatus: AppStatus = {
     outputDirectory: "~/Downloads/OshiClip",
   },
   activeJobId: null,
+  activeDownload: null,
 };
 
 const browserEvents = new EventTarget();
@@ -353,7 +354,21 @@ export async function startDownload(spec: DownloadSpec): Promise<DownloadJob> {
 
   const jobId = `preview-${Date.now()}`;
   const outputPath = `${browserStatus.settings.outputDirectory}/${spec.outputName}.mp4`;
+  const startedAt = new Date().toISOString();
+  const startedAtMs = Date.now();
   browserStatus.activeJobId = jobId;
+  browserStatus.activeDownload = {
+    ...spec,
+    jobId,
+    outputPath,
+    startedAt,
+    phase: "preparing",
+    percent: null,
+    speed: null,
+    eta: null,
+    downloadedBytes: 0,
+    elapsedSeconds: 0,
+  };
   let percent = 0;
   emitBrowserEvent("download-log", {
     jobId,
@@ -362,16 +377,22 @@ export async function startDownload(spec: DownloadSpec): Promise<DownloadJob> {
   });
   simulationTimer = window.setInterval(() => {
     percent = Math.min(100, percent + 4 + Math.round(Math.random() * 7));
-    emitBrowserEvent("download-progress", {
-      jobId,
-      percent,
+    const activeDownload = {
+      ...browserStatus.activeDownload!,
+      phase: percent >= 96 ? "finalizing" as const : "downloading" as const,
+      percent: Math.min(99.9, percent),
       speed: `${(4.1 + Math.random() * 2).toFixed(2)} MiB/s`,
       eta: percent >= 100 ? "00:00" : `00:${String(Math.ceil((100 - percent) / 8)).padStart(2, "0")}`,
-    });
+      downloadedBytes: Math.round((percent / 100) * 64 * 1024 * 1024),
+      elapsedSeconds: Math.floor((Date.now() - startedAtMs) / 1000),
+    };
+    browserStatus.activeDownload = activeDownload;
+    emitBrowserEvent("download-progress", activeDownload);
     if (percent >= 100) {
       if (simulationTimer !== null) window.clearInterval(simulationTimer);
       simulationTimer = null;
       browserStatus.activeJobId = null;
+      browserStatus.activeDownload = null;
       browserHistory = [
         {
           id: jobId,
@@ -401,6 +422,7 @@ export async function cancelDownload(jobId: string) {
   if (simulationTimer !== null) window.clearInterval(simulationTimer);
   simulationTimer = null;
   browserStatus.activeJobId = null;
+  browserStatus.activeDownload = null;
   emitBrowserEvent("download-error", {
     jobId,
     message: "下載已取消",

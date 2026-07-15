@@ -3,23 +3,22 @@ use crate::{
     error::{AppError, AppResult},
     history::record_completed_download,
     manifest::ManifestStore,
-    models::{AppStatus, DownloadJob, DownloadSpec, Tool},
+    models::{ActiveDownloadStatus, AppStatus, DownloadJob, DownloadPhase, DownloadSpec, Tool},
     ActiveDownload, AppState,
 };
+use chrono::Utc;
 use serde::Serialize;
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProgressEvent<'a> {
-    job_id: &'a str,
-    percent: f64,
-    speed: Option<String>,
-    eta: Option<String>,
-}
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+const WAITING_AFTER: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,13 +47,13 @@ struct ErrorEvent<'a> {
 pub fn get_app_status(state: State<'_, AppState>) -> AppResult<AppStatus> {
     let store = ManifestStore::new(state.app_data.clone());
     let manifest = store.read()?;
-    let active_job_id = state
+    let active_download = state
         .active_download
         .lock()
         .map_err(|_| AppError::Message("下載狀態鎖定失敗".into()))?
         .as_ref()
-        .map(|download| download.job_id.clone());
-    Ok(AppStatus::from_manifest(&manifest, active_job_id))
+        .map(|download| download.status.clone());
+    Ok(AppStatus::from_manifest(&manifest, active_download))
 }
 
 #[tauri::command]
@@ -113,6 +112,22 @@ pub async fn start_download(
         chrono::Utc::now().timestamp_millis()
     );
     let output_path = expected_output.to_string_lossy().into_owned();
+    let status = ActiveDownloadStatus {
+        job_id: job_id.clone(),
+        url: spec.url.trim().to_owned(),
+        start_seconds: spec.start_seconds,
+        end_seconds: spec.end_seconds,
+        output_name: spec.output_name.trim().to_owned(),
+        output_path: output_path.clone(),
+        format_preset: spec.format_preset,
+        started_at: Utc::now().to_rfc3339(),
+        phase: DownloadPhase::Preparing,
+        percent: None,
+        speed: None,
+        eta: None,
+        downloaded_bytes: 0,
+        elapsed_seconds: 0,
+    };
 
     {
         let mut active = state
@@ -127,6 +142,7 @@ pub async fn start_download(
             job_id: job_id.clone(),
             child: Some(child),
             cancelled: false,
+            status,
         });
     }
 
@@ -192,98 +208,171 @@ async fn monitor_download(
     expected_output: String,
     mut receiver: tokio::sync::mpsc::Receiver<CommandEvent>,
 ) {
-    let mut final_output = expected_output;
+    let mut final_output = expected_output.clone();
     let mut saw_termination = false;
-    while let Some(event) = receiver.recv().await {
-        match event {
-            CommandEvent::Stdout(bytes) => {
-                let text = String::from_utf8_lossy(&bytes);
-                for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
-                    if let Some(progress) = parse_progress(line) {
-                        let _ = app.emit(
-                            "download-progress",
-                            ProgressEvent {
-                                job_id: &job_id,
-                                percent: progress.percent,
-                                speed: progress.speed,
-                                eta: progress.eta,
-                            },
-                        );
-                    } else if let Some(path) = line.strip_prefix("FINAL ") {
-                        final_output = path.trim().to_owned();
-                    } else {
-                        let _ = app.emit(
-                            "download-log",
-                            LogEvent {
-                                job_id: &job_id,
-                                line,
-                                stream: "stdout",
-                            },
-                        );
+    let started = Instant::now();
+    let mut last_activity = started;
+    let mut last_sample = started;
+    let mut last_size = partial_output_size(&expected_output);
+    let mut base_phase = DownloadPhase::Preparing;
+    let mut waiting_reported = false;
+    let mut ffmpeg_progress =
+        FfmpegProgressTracker::new(spec.end_seconds.saturating_sub(spec.start_seconds));
+    let mut stdout_lines = LineDecoder::default();
+    let mut stderr_lines = LineDecoder::default();
+
+    emit_log(
+        &app,
+        &job_id,
+        "[OshiClip] 正在解析 YouTube 來源並準備片段下載…",
+        "stdout",
+    );
+    if let Some(status) = update_active_download(&app, &job_id, |status| {
+        status.elapsed_seconds = 0;
+    }) {
+        emit_download_status(&app, &status);
+    }
+
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    heartbeat.tick().await;
+
+    loop {
+        tokio::select! {
+            event = receiver.recv() => {
+                let Some(event) = event else { break };
+                match event {
+                    CommandEvent::Stdout(bytes) => {
+                        for line in stdout_lines.push(&bytes) {
+                            handle_stdout_line(
+                                DownloadEventTarget {
+                                    app: &app,
+                                    job_id: &job_id,
+                                },
+                                &line,
+                                &mut final_output,
+                                &mut ffmpeg_progress,
+                                started,
+                                &mut last_activity,
+                                &mut base_phase,
+                            );
+                        }
                     }
+                    CommandEvent::Stderr(bytes) => {
+                        for line in stderr_lines.push(&bytes) {
+                            let line = line.trim();
+                            if !line.is_empty() {
+                                last_activity = Instant::now();
+                                if let Some(progress) = parse_progress(line) {
+                                    base_phase = DownloadPhase::Downloading;
+                                    emit_progress_update(
+                                        &app,
+                                        &job_id,
+                                        &progress,
+                                        DownloadPhase::Downloading,
+                                        started.elapsed().as_secs(),
+                                    );
+                                } else {
+                                    emit_log(&app, &job_id, line, "stderr");
+                                }
+                            }
+                        }
+                    }
+                    CommandEvent::Terminated(payload) => {
+                        saw_termination = true;
+                        let cancelled = clear_active_download(&app, &job_id);
+                        if cancelled {
+                            let _ = app.emit(
+                                "download-error",
+                                ErrorEvent {
+                                    job_id: &job_id,
+                                    message: "下載已取消",
+                                    code: payload.code,
+                                },
+                            );
+                        } else if payload.code == Some(0) {
+                            if let Err(error) =
+                                record_completed_download(&app, &job_id, &spec, &final_output)
+                            {
+                                let warning = format!("無法保存下載紀錄：{error}");
+                                emit_log(&app, &job_id, &warning, "stderr");
+                            }
+                            let _ = app.emit(
+                                "download-done",
+                                DoneEvent {
+                                    job_id: &job_id,
+                                    output_path: &final_output,
+                                },
+                            );
+                        } else {
+                            let _ = app.emit(
+                                "download-error",
+                                ErrorEvent {
+                                    job_id: &job_id,
+                                    message: "yt-dlp 執行失敗，請展開日誌查看詳細資訊",
+                                    code: payload.code,
+                                },
+                            );
+                        }
+                        break;
+                    }
+                    _ => {}
                 }
             }
-            CommandEvent::Stderr(bytes) => {
-                let text = String::from_utf8_lossy(&bytes);
-                for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
-                    let _ = app.emit(
-                        "download-log",
-                        LogEvent {
-                            job_id: &job_id,
-                            line,
-                            stream: "stderr",
-                        },
-                    );
-                }
-            }
-            CommandEvent::Terminated(payload) => {
-                saw_termination = true;
-                let cancelled = clear_active_download(&app, &job_id);
-                if cancelled {
-                    let _ = app.emit(
-                        "download-error",
-                        ErrorEvent {
-                            job_id: &job_id,
-                            message: "下載已取消",
-                            code: payload.code,
-                        },
-                    );
-                } else if payload.code == Some(0) {
-                    if let Err(error) =
-                        record_completed_download(&app, &job_id, &spec, &final_output)
-                    {
-                        let warning = format!("無法保存下載紀錄：{error}");
-                        let _ = app.emit(
-                            "download-log",
-                            LogEvent {
-                                job_id: &job_id,
-                                line: &warning,
-                                stream: "stderr",
-                            },
-                        );
+            _ = heartbeat.tick() => {
+                let now = Instant::now();
+                let current_size = partial_output_size(&expected_output);
+                let sample_seconds = now.duration_since(last_sample).as_secs_f64();
+                let sampled_speed = (current_size > last_size && sample_seconds > 0.0)
+                    .then(|| format_transfer_rate((current_size - last_size) as f64 / sample_seconds));
+
+                if current_size > last_size {
+                    last_activity = now;
+                    if base_phase != DownloadPhase::Finalizing {
+                        base_phase = DownloadPhase::Downloading;
                     }
-                    let _ = app.emit(
-                        "download-done",
-                        DoneEvent {
-                            job_id: &job_id,
-                            output_path: &final_output,
-                        },
-                    );
+                }
+
+                let waiting = base_phase != DownloadPhase::Finalizing
+                    && now.duration_since(last_activity) >= WAITING_AFTER;
+                let visible_phase = if waiting {
+                    DownloadPhase::Waiting
                 } else {
-                    let _ = app.emit(
-                        "download-error",
-                        ErrorEvent {
-                            job_id: &job_id,
-                            message: "yt-dlp 執行失敗，請展開日誌查看詳細資訊",
-                            code: payload.code,
-                        },
-                    );
+                    base_phase
+                };
+                if let Some(status) = update_active_download(&app, &job_id, |status| {
+                    status.phase = visible_phase;
+                    status.elapsed_seconds = started.elapsed().as_secs();
+                    status.downloaded_bytes = status.downloaded_bytes.max(current_size);
+                    if waiting {
+                        status.speed = None;
+                        status.eta = None;
+                    } else if status.percent.is_none() && sampled_speed.is_some() {
+                        status.speed.clone_from(&sampled_speed);
+                    }
+                }) {
+                    emit_download_status(&app, &status);
                 }
-                break;
+
+                if waiting && !waiting_reported {
+                    emit_log(
+                        &app,
+                        &job_id,
+                        "[OshiClip] 已有 30 秒沒有收到新資料；下載工具仍在執行，可繼續等待或取消任務。",
+                        "stderr",
+                    );
+                    waiting_reported = true;
+                } else if !waiting && waiting_reported {
+                    emit_log(&app, &job_id, "[OshiClip] 下載工具已恢復輸出。", "stdout");
+                    waiting_reported = false;
+                }
+
+                last_size = current_size;
+                last_sample = now;
             }
-            _ => {}
         }
     }
+
     if !saw_termination {
         clear_active_download(&app, &job_id);
         let _ = app.emit(
@@ -301,6 +390,7 @@ struct ParsedProgress {
     percent: f64,
     speed: Option<String>,
     eta: Option<String>,
+    downloaded_bytes: Option<u64>,
 }
 
 fn parse_progress(line: &str) -> Option<ParsedProgress> {
@@ -312,7 +402,276 @@ fn parse_progress(line: &str) -> Option<ParsedProgress> {
         percent,
         speed,
         eta,
+        downloaded_bytes: None,
     })
+}
+
+struct DownloadEventTarget<'a> {
+    app: &'a AppHandle,
+    job_id: &'a str,
+}
+
+fn handle_stdout_line(
+    target: DownloadEventTarget<'_>,
+    raw_line: &str,
+    final_output: &mut String,
+    ffmpeg_progress: &mut FfmpegProgressTracker,
+    started: Instant,
+    last_activity: &mut Instant,
+    base_phase: &mut DownloadPhase,
+) {
+    let line = raw_line.trim();
+    if line.is_empty() {
+        return;
+    }
+
+    if let Some(progress) = parse_progress(line) {
+        *last_activity = Instant::now();
+        *base_phase = DownloadPhase::Downloading;
+        emit_progress_update(
+            target.app,
+            target.job_id,
+            &progress,
+            DownloadPhase::Downloading,
+            started.elapsed().as_secs(),
+        );
+        return;
+    }
+
+    match ffmpeg_progress.consume(line) {
+        FfmpegLine::Field => {
+            *last_activity = Instant::now();
+        }
+        FfmpegLine::Report { progress, ended } => {
+            *last_activity = Instant::now();
+            *base_phase = if ended {
+                DownloadPhase::Finalizing
+            } else {
+                DownloadPhase::Downloading
+            };
+            emit_progress_update(
+                target.app,
+                target.job_id,
+                &progress,
+                *base_phase,
+                started.elapsed().as_secs(),
+            );
+        }
+        FfmpegLine::NotProgress => {
+            if let Some(path) = line.strip_prefix("FINAL ") {
+                *last_activity = Instant::now();
+                *base_phase = DownloadPhase::Finalizing;
+                *final_output = path.trim().to_owned();
+                if let Some(status) = update_active_download(target.app, target.job_id, |status| {
+                    status.output_path.clone_from(final_output);
+                    status.phase = DownloadPhase::Finalizing;
+                    status.elapsed_seconds = started.elapsed().as_secs();
+                }) {
+                    emit_download_status(target.app, &status);
+                }
+            } else {
+                *last_activity = Instant::now();
+                emit_log(target.app, target.job_id, line, "stdout");
+            }
+        }
+    }
+}
+
+fn emit_progress_update(
+    app: &AppHandle,
+    job_id: &str,
+    progress: &ParsedProgress,
+    phase: DownloadPhase,
+    elapsed_seconds: u64,
+) {
+    if let Some(status) = update_active_download(app, job_id, |status| {
+        status.phase = phase;
+        status.percent = Some(progress.percent.clamp(0.0, 99.9));
+        status.speed.clone_from(&progress.speed);
+        status.eta.clone_from(&progress.eta);
+        status.elapsed_seconds = elapsed_seconds;
+        if let Some(downloaded_bytes) = progress.downloaded_bytes {
+            status.downloaded_bytes = status.downloaded_bytes.max(downloaded_bytes);
+        }
+    }) {
+        emit_download_status(app, &status);
+    }
+}
+
+fn emit_download_status(app: &AppHandle, status: &ActiveDownloadStatus) {
+    let _ = app.emit("download-progress", status);
+}
+
+fn emit_log(app: &AppHandle, job_id: &str, line: &str, stream: &str) {
+    let _ = app.emit(
+        "download-log",
+        LogEvent {
+            job_id,
+            line,
+            stream,
+        },
+    );
+}
+
+fn update_active_download(
+    app: &AppHandle,
+    job_id: &str,
+    update: impl FnOnce(&mut ActiveDownloadStatus),
+) -> Option<ActiveDownloadStatus> {
+    let state = app.state::<AppState>();
+    let mut active = state.active_download.lock().ok()?;
+    let download = active
+        .as_mut()
+        .filter(|download| download.job_id == job_id)?;
+    update(&mut download.status);
+    Some(download.status.clone())
+}
+
+fn partial_output_size(expected_output: &str) -> u64 {
+    fs::metadata(format!("{expected_output}.part"))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+fn format_transfer_rate(bytes_per_second: f64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    if bytes_per_second >= MIB {
+        format!("{:.1} MiB/s", bytes_per_second / MIB)
+    } else if bytes_per_second >= KIB {
+        format!("{:.0} KiB/s", bytes_per_second / KIB)
+    } else {
+        format!("{bytes_per_second:.0} B/s")
+    }
+}
+
+#[derive(Default)]
+struct LineDecoder {
+    buffer: Vec<u8>,
+}
+
+impl LineDecoder {
+    fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+        self.buffer.extend_from_slice(bytes);
+        let mut lines = Vec::new();
+        while let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let mut line = self.buffer.drain(..=newline).collect::<Vec<_>>();
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            lines.push(String::from_utf8_lossy(&line).into_owned());
+        }
+        lines
+    }
+}
+
+struct FfmpegProgressTracker {
+    duration_micros: u64,
+    out_time_micros: u64,
+    downloaded_bytes: Option<u64>,
+    speed: Option<String>,
+}
+
+enum FfmpegLine {
+    NotProgress,
+    Field,
+    Report {
+        progress: ParsedProgress,
+        ended: bool,
+    },
+}
+
+impl FfmpegProgressTracker {
+    fn new(duration_seconds: u64) -> Self {
+        Self {
+            duration_micros: duration_seconds.saturating_mul(1_000_000),
+            out_time_micros: 0,
+            downloaded_bytes: None,
+            speed: None,
+        }
+    }
+
+    fn consume(&mut self, line: &str) -> FfmpegLine {
+        let Some((key, value)) = line.split_once('=') else {
+            return FfmpegLine::NotProgress;
+        };
+        if !is_ffmpeg_progress_key(key) {
+            return FfmpegLine::NotProgress;
+        }
+
+        match key {
+            "out_time_us" => {
+                self.out_time_micros = value.parse::<i64>().unwrap_or(0).max(0) as u64;
+            }
+            "total_size" => {
+                self.downloaded_bytes = value.parse().ok();
+            }
+            "speed" => {
+                self.speed = normalize_progress_value(Some(value));
+            }
+            "progress" => {
+                let ended = value == "end";
+                let ceiling = if ended { 99.9 } else { 99.5 };
+                let percent = if self.duration_micros == 0 {
+                    0.0
+                } else {
+                    (self.out_time_micros as f64 / self.duration_micros as f64 * 100.0)
+                        .clamp(0.0, ceiling)
+                };
+                let eta = (!ended)
+                    .then(|| {
+                        ffmpeg_eta(
+                            self.duration_micros.saturating_sub(self.out_time_micros),
+                            self.speed.as_deref(),
+                        )
+                    })
+                    .flatten();
+                return FfmpegLine::Report {
+                    progress: ParsedProgress {
+                        percent,
+                        speed: self.speed.clone(),
+                        eta,
+                        downloaded_bytes: self.downloaded_bytes,
+                    },
+                    ended,
+                };
+            }
+            _ => {}
+        }
+        FfmpegLine::Field
+    }
+}
+
+fn is_ffmpeg_progress_key(key: &str) -> bool {
+    matches!(
+        key,
+        "frame"
+            | "fps"
+            | "bitrate"
+            | "total_size"
+            | "out_time_us"
+            | "out_time_ms"
+            | "out_time"
+            | "dup_frames"
+            | "drop_frames"
+            | "speed"
+            | "progress"
+    ) || key.starts_with("stream_")
+}
+
+fn ffmpeg_eta(remaining_micros: u64, speed: Option<&str>) -> Option<String> {
+    let multiplier = speed?.strip_suffix('x')?.trim().parse::<f64>().ok()?;
+    if !multiplier.is_finite() || multiplier <= 0.0 {
+        return None;
+    }
+    let seconds = (remaining_micros as f64 / 1_000_000.0 / multiplier).ceil() as u64;
+    Some(format!(
+        "{:02}:{:02}:{:02}",
+        seconds / 3600,
+        seconds % 3600 / 60,
+        seconds % 60
+    ))
 }
 
 fn normalize_progress_value(value: Option<&str>) -> Option<String> {
@@ -371,5 +730,58 @@ mod tests {
         let progress = parse_progress("PROGRESS 1.0% NA N/A").unwrap();
         assert_eq!(progress.speed, None);
         assert_eq!(progress.eta, None);
+    }
+
+    #[test]
+    fn parses_ffmpeg_machine_progress_for_clip_percentage() {
+        let mut tracker = FfmpegProgressTracker::new(330);
+        assert!(matches!(
+            tracker.consume("total_size=10485760"),
+            FfmpegLine::Field
+        ));
+        assert!(matches!(
+            tracker.consume("out_time_us=165000000"),
+            FfmpegLine::Field
+        ));
+        assert!(matches!(tracker.consume("speed=2.00x"), FfmpegLine::Field));
+
+        let FfmpegLine::Report { progress, ended } = tracker.consume("progress=continue") else {
+            panic!("expected a complete ffmpeg progress report");
+        };
+        assert!(!ended);
+        assert!((progress.percent - 50.0).abs() < f64::EPSILON);
+        assert_eq!(progress.downloaded_bytes, Some(10_485_760));
+        assert_eq!(progress.speed.as_deref(), Some("2.00x"));
+        assert_eq!(progress.eta.as_deref(), Some("00:01:23"));
+    }
+
+    #[test]
+    fn keeps_ffmpeg_completion_below_one_hundred_until_process_exit() {
+        let mut tracker = FfmpegProgressTracker::new(10);
+        tracker.consume("out_time_us=12000000");
+        let FfmpegLine::Report { progress, ended } = tracker.consume("progress=end") else {
+            panic!("expected the final ffmpeg progress report");
+        };
+        assert!(ended);
+        assert!((progress.percent - 99.9).abs() < f64::EPSILON);
+        assert_eq!(progress.eta, None);
+    }
+
+    #[test]
+    fn buffers_split_utf8_and_multiple_process_lines() {
+        let mut decoder = LineDecoder::default();
+        let output = "FINAL /tmp/六等星.mp4\nprogress=end\n".as_bytes();
+        let split = output.iter().position(|byte| *byte >= 0x80).unwrap() + 1;
+        assert!(decoder.push(&output[..split]).is_empty());
+        assert_eq!(
+            decoder.push(&output[split..]),
+            vec!["FINAL /tmp/六等星.mp4", "progress=end"]
+        );
+    }
+
+    #[test]
+    fn formats_observed_file_write_rate() {
+        assert_eq!(format_transfer_rate(5.25 * 1024.0 * 1024.0), "5.2 MiB/s");
+        assert_eq!(format_transfer_rate(512.0 * 1024.0), "512 KiB/s");
     }
 }
