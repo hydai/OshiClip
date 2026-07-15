@@ -21,12 +21,14 @@ import {
   canCheckForAppUpdate,
   checkForAppUpdate,
   getAppStatus,
+  getVodLibrary,
   isDesktopRuntime,
   onDesktopEvent,
   subscribeToDeepLinks,
 } from "./lib/desktop";
 import { parseDownloadDeepLink } from "./lib/deepLink";
 import { historyEntryToPrefill } from "./lib/history";
+import { shouldAutoSyncVodLibrary } from "./lib/vodLibrary";
 import {
   applyUiPreferences,
   saveUiPreferences,
@@ -37,6 +39,7 @@ import type {
   AvailableAppUpdate,
   DownloadHistoryEntry,
   DownloadPrefill,
+  VodLibraryDataset,
 } from "./types";
 
 type ViewName = "download" | "library" | "tools" | "history" | "settings";
@@ -62,6 +65,12 @@ export default function App({ initialUiPreferences }: AppProps) {
   const [uiPreferences, setUiPreferences] = useState(initialUiPreferences);
   const [status, setStatus] = useState<AppStatus>(EMPTY_STATUS);
   const [loading, setLoading] = useState(true);
+  const [vodLibraryDataset, setVodLibraryDataset] =
+    useState<VodLibraryDataset | null>(null);
+  const [vodLibraryLoading, setVodLibraryLoading] = useState(true);
+  const [vodLibrarySyncing, setVodLibrarySyncing] = useState(false);
+  const [vodLibraryError, setVodLibraryError] = useState<string | null>(null);
+  const [vodLibrarySyncError, setVodLibrarySyncError] = useState<string | null>(null);
   const [prefill, setPrefill] = useState<DownloadPrefill | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [availableAppUpdate, setAvailableAppUpdate] =
@@ -69,6 +78,9 @@ export default function App({ initialUiPreferences }: AppProps) {
   const [checkingForUpdate, setCheckingForUpdate] = useState(false);
   const updateCheckStarted = useRef(false);
   const updateCheckInFlight = useRef(false);
+  const vodLibraryLoadStarted = useRef(false);
+  const vodLibrarySyncInFlight = useRef(false);
+  const vodLibraryDatasetRef = useRef<VodLibraryDataset | null>(null);
 
   const notify = useCallback((message: string, tone: Toast["tone"] = "info") => {
     const id = Date.now() + Math.random();
@@ -88,9 +100,66 @@ export default function App({ initialUiPreferences }: AppProps) {
     }
   }, [notify]);
 
+  const storeVodLibraryDataset = useCallback((dataset: VodLibraryDataset) => {
+    vodLibraryDatasetRef.current = dataset;
+    setVodLibraryDataset(dataset);
+    setVodLibraryError(null);
+  }, []);
+
+  const syncVodLibrary = useCallback(
+    async (manual = false) => {
+      if (vodLibrarySyncInFlight.current) return;
+      vodLibrarySyncInFlight.current = true;
+      setVodLibrarySyncing(true);
+      setVodLibrarySyncError(null);
+      try {
+        const previous = vodLibraryDatasetRef.current;
+        const next = await getVodLibrary(true);
+        storeVodLibraryDataset(next);
+        if (manual) {
+          notify(
+            previous && previous.sha256 !== next.sha256
+              ? "歌回資料庫已更新。"
+              : "歌回資料庫已是最新版本。",
+            "success",
+          );
+        }
+      } catch (syncError) {
+        const message = syncError instanceof Error ? syncError.message : String(syncError);
+        if (vodLibraryDatasetRef.current) setVodLibrarySyncError(message);
+        else setVodLibraryError(message);
+        if (manual) notify(`無法同步歌回資料庫：${message}`, "error");
+      } finally {
+        vodLibrarySyncInFlight.current = false;
+        setVodLibrarySyncing(false);
+      }
+    },
+    [notify, storeVodLibraryDataset],
+  );
+
   useEffect(() => {
     void refreshStatus();
   }, [refreshStatus]);
+
+  useEffect(() => {
+    if (vodLibraryLoadStarted.current) return;
+    vodLibraryLoadStarted.current = true;
+    void (async () => {
+      try {
+        const dataset = await getVodLibrary();
+        storeVodLibraryDataset(dataset);
+        if (shouldAutoSyncVodLibrary(dataset.syncedAt)) {
+          void syncVodLibrary();
+        }
+      } catch (loadError) {
+        setVodLibraryError(
+          loadError instanceof Error ? loadError.message : String(loadError),
+        );
+      } finally {
+        setVodLibraryLoading(false);
+      }
+    })();
+  }, [storeVodLibraryDataset, syncVodLibrary]);
 
   useEffect(() => {
     let active = true;
@@ -319,8 +388,13 @@ export default function App({ initialUiPreferences }: AppProps) {
           )}
           {view === "library" && (
             <VodLibraryView
+              dataset={vodLibraryDataset}
+              loading={vodLibraryLoading}
+              syncing={vodLibrarySyncing}
+              error={vodLibraryError}
+              syncError={vodLibrarySyncError}
+              onSync={() => syncVodLibrary(true)}
               onChoose={chooseLibraryPerformance}
-              notify={notify}
             />
           )}
           {view === "history" && (

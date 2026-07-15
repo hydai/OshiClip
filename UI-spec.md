@@ -664,7 +664,7 @@ UI 安裝階段：
 │ 從歌回裡，直接找到想收藏的歌。                                           │
 │ 搜尋 data.oshi.tw 的正式資料，選一首歌就能帶入下載片段。                  │
 ├───────────────────────────────────────────────────────────────────────────┤
-│ [VTuber 36] [歌回 553] [歌曲 8,509] [SHA-256 已驗證／發布時間] [更新資料] │
+│ [VTuber 36] [歌回 553] [歌曲 8,509] [驗證／同步／發布時間] [↻]       │
 ├───────────────────────────────────────────────────────────────────────────┤
 │ [搜尋 VTuber、VOD、歌曲或原唱…] [全部 VTuber ▾] [最新優先 ▾]             │
 ├───────────────────────────────────────────────────────────────────────────┤
@@ -710,8 +710,10 @@ UI 安裝階段：
 3. `snapshotUrl` 必須精確等於 `https://data.oshi.tw/vod/v1/snapshots/{sha256}.json`。
 4. 驗證 decoded byte length 與 SHA-256 後，才解析 snapshot。
 5. 驗證必要欄位、null 規則、日期、YouTube ID、時間範圍、URL allowlist、Unicode NFC、首尾空白、ID 唯一性、canonical ordering 與 counts。
-6. 通過全部檢查後才原子替換記憶體快取；相同 hash 不重抓 snapshot。
-7. 一般讀取失敗且已有快取時保留 last-known-good，15 秒後可再試；使用者明確按「更新資料」失敗時顯示 error toast，不清空畫面。
+6. 通過全部檢查後，將 manifest 與原始 snapshot 以「snapshot 先寫、metadata 後寫」原子存入 App Data；重啟讀取時會重做大小、SHA-256、schema 與語意驗證。
+7. App 啟動時先將 last-known-good 快取帶入 React 常駐狀態，切換分頁不重新 fetch 或重建資料集。
+8. 上次成功同步超過 24 小時才在背景檢查 manifest；相同 hash 只更新同步時間，不重抓 snapshot。
+9. 使用者可按同步 icon 強制檢查。同步失敗會顯示 error toast 與快取狀態，但不清空畫面。
 
 首次載入、無資料錯誤、無搜尋結果與背景更新各有獨立狀態。瀏覽器預覽模式使用少量本機模擬資料，不連線到 production feed。
 
@@ -831,6 +833,7 @@ interface UiPreferences {
 interface VodLibraryDataset {
   schemaVersion: string;
   publishedAt: string;
+  syncedAt: string;
   sha256: string;
   counts: { streamers: number; vods: number; performances: number };
   streamers: Array<{
@@ -877,7 +880,7 @@ interface DownloadHistoryEntry {
 
 相關 invoke commands 為 `list_download_history`、`remove_download_history`、`clear_download_history` 與 `reveal_history_output`。
 
-歌回資料庫由 `get_vod_library({ forceRefresh })` 取得。IPC 顯示模型刻意省略不需要呈現的 channel ID、社群連結、頭像 URL 與 `songId`；Rust 仍會在轉換前驗證完整來源資料。
+歌回資料庫由 `get_vod_library({ forceRefresh })` 取得。`forceRefresh=false` 優先立即回傳記憶體或磁碟快取，`true` 才會連線檢查 manifest；`syncedAt` 為上次成功檢查時間。IPC 顯示模型刻意省略不需要呈現的 channel ID、社群連結、頭像 URL 與 `songId`；Rust 仍會在轉換前驗證完整來源資料。
 
 ### 12.2 即時事件
 
@@ -899,7 +902,7 @@ interface DownloadHistoryEntry {
 - 下載頁兩欄。
 - 工具卡兩欄；三張卡會形成「2 + 1」排列。
 - 下載紀錄卡為「檔案圖示／內容／操作」三欄。
-- 歌回摘要為三個統計、來源狀態與更新按鈕；篩選列為三欄。
+- 歌回摘要為三個統計、來源／同步狀態與 icon-only 同步按鈕；篩選列為三欄。
 - Progress card 為 sticky。
 - 頁首右側裝飾存在。
 

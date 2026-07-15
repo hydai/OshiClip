@@ -9,6 +9,19 @@ import type {
 
 export type VodLibrarySort = "newest" | "oldest";
 
+export const VOD_LIBRARY_AUTO_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MAX_FUTURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+export function shouldAutoSyncVodLibrary(
+  syncedAt: string,
+  now = Date.now(),
+): boolean {
+  const syncedAtMs = Date.parse(syncedAt);
+  if (!Number.isFinite(syncedAtMs)) return true;
+  if (syncedAtMs > now + MAX_FUTURE_CLOCK_SKEW_MS) return true;
+  return now - syncedAtMs >= VOD_LIBRARY_AUTO_SYNC_INTERVAL_MS;
+}
+
 export interface VodLibraryCard {
   id: string;
   streamer: VodLibraryStreamer;

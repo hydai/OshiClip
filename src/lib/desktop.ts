@@ -107,9 +107,10 @@ let browserHistory: DownloadHistoryEntry[] = [
   },
 ];
 
-const browserVodLibrary: VodLibraryDataset = {
+let browserVodLibrary: VodLibraryDataset = {
   schemaVersion: "1.0.0",
   publishedAt: "2026-07-11T20:04:22.682Z",
+  syncedAt: now,
   sha256: "preview",
   counts: { streamers: 2, vods: 3, performances: 7 },
   streamers: [
@@ -473,6 +474,12 @@ export async function getVodLibrary(
     return invoke<VodLibraryDataset>("get_vod_library", { forceRefresh });
   }
   await new Promise((resolve) => window.setTimeout(resolve, forceRefresh ? 420 : 180));
+  if (forceRefresh) {
+    browserVodLibrary = {
+      ...browserVodLibrary,
+      syncedAt: new Date().toISOString(),
+    };
+  }
   return structuredClone(browserVodLibrary);
 }
 

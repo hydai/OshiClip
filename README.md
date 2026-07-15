@@ -12,7 +12,7 @@ OshiClip 可獨立使用，也能承接 [vods.oshi.tw](https://vods.oshi.tw) 產
 
 ## 歌回資料來源
 
-內建的「歌回資料庫」由 Rust 後端讀取 [`data.oshi.tw` VOD v1 manifest](https://data.oshi.tw/vod/v1/manifest.json)，不依賴 `vods.oshi.tw` 的頁面或瀏覽器 CORS。候選 snapshot 必須通過 trusted URL、HTTP content type、10 MiB 大小上限、SHA-256、schema major、欄位語意、canonical ordering、ID 唯一性與 counts 驗證，才會原子切換成目前資料；更新失敗時會保留上一份已驗證的記憶體快取。
+內建的「歌回資料庫」由 Rust 後端讀取 [`data.oshi.tw` VOD v1 manifest](https://data.oshi.tw/vod/v1/manifest.json)，不依賴 `vods.oshi.tw` 的頁面或瀏覽器 CORS。候選 snapshot 必須通過 trusted URL、HTTP content type、10 MiB 大小上限、SHA-256、schema major、欄位語意、canonical ordering、ID 唯一性與 counts 驗證，才會原子寫入本機 last-known-good 快取。App 啟動後會先顯示快取，上次成功同步超過 24 小時才背景更新，也可由使用者手動同步；更新失敗不會清空已驗證資料。
 
 新分頁提供全文搜尋、VTuber 篩選、日期排序、VOD 歌曲時間軸與「帶入下載」。選擇歌曲只會預填既有下載表單，不會自動執行下載。
 

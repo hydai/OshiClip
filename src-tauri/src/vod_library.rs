@@ -2,7 +2,7 @@ use crate::{
     error::{AppError, AppResult},
     AppState,
 };
-use chrono::{DateTime, NaiveDate};
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use futures_util::StreamExt;
 use reqwest::{header::CONTENT_TYPE, Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
-    time::{Duration, Instant},
+    fs,
+    io::{BufWriter, Write},
+    path::{Path, PathBuf},
+    time::Duration,
 };
 use tauri::State;
 use unicode_normalization::UnicodeNormalization;
@@ -21,8 +24,10 @@ const SNAPSHOT_PREFIX: &str = "https://data.oshi.tw/vod/v1/snapshots/";
 const MAX_MANIFEST_BYTES: usize = 65_536;
 const MAX_SNAPSHOT_BYTES: usize = 10_485_760;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
-const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-const FAILED_REFRESH_RETRY: Duration = Duration::from_secs(15);
+const CACHE_SCHEMA_VERSION: u32 = 1;
+const CACHE_DIRECTORY: &str = "vod-library";
+const CACHE_METADATA_FILE: &str = "cache.json";
+const CACHE_SNAPSHOTS_DIRECTORY: &str = "snapshots";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -32,7 +37,7 @@ pub struct VodCounts {
     pub performances: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VodManifest {
     schema_version: String,
@@ -43,18 +48,18 @@ struct VodManifest {
     counts: VodCounts,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VodSnapshot {
     schema_version: String,
     streamers: Vec<VodStreamer>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(transparent)]
 struct RequiredNullableString(Option<String>);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VodStreamer {
     slug: String,
@@ -66,7 +71,7 @@ struct VodStreamer {
     vods: Vec<Vod>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Vod {
     title: String,
@@ -75,7 +80,7 @@ struct Vod {
     performances: Vec<VodPerformance>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VodPerformance {
     performance_id: String,
@@ -91,6 +96,7 @@ struct VodPerformance {
 pub struct VodLibraryDataset {
     pub schema_version: String,
     pub published_at: String,
+    pub synced_at: String,
     pub sha256: String,
     pub counts: VodCounts,
     pub streamers: Vec<VodLibraryStreamer>,
@@ -126,7 +132,19 @@ pub struct VodLibraryPerformance {
 
 pub(crate) struct CachedVodLibrary {
     dataset: VodLibraryDataset,
-    next_refresh_at: Instant,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VodCacheMetadata {
+    schema_version: u32,
+    synced_at: String,
+    manifest: VodManifest,
+}
+
+#[derive(Debug, Clone)]
+struct VodLibraryCacheStore {
+    root: PathBuf,
 }
 
 fn vod_client() -> AppResult<Client> {
@@ -146,54 +164,72 @@ pub async fn get_vod_library(
     let force_refresh = force_refresh.unwrap_or(false);
     let mut cache = state.vod_library_cache.lock().await;
 
-    if !force_refresh {
-        if let Some(entry) = cache.as_ref() {
-            if Instant::now() < entry.next_refresh_at {
-                return Ok(entry.dataset.clone());
-            }
+    if cache.is_none() {
+        let app_data = state.app_data.clone();
+        let persisted =
+            tokio::task::spawn_blocking(move || VodLibraryCacheStore::new(app_data).read())
+                .await
+                .map_err(|error| message(format!("讀取歌回快取時發生錯誤：{error}")))?
+                .unwrap_or(None);
+        if persisted.is_some() {
+            *cache = persisted;
         }
     }
 
-    let client = match vod_client() {
-        Ok(client) => client,
-        Err(error) => return cached_or_error(&mut cache, force_refresh, error),
-    };
-    let manifest = match fetch_manifest(&client).await {
-        Ok(manifest) => manifest,
-        Err(error) => return cached_or_error(&mut cache, force_refresh, error),
-    };
+    if !force_refresh {
+        if let Some(entry) = cache.as_ref() {
+            return Ok(entry.dataset.clone());
+        }
+    }
+
+    let client = vod_client()?;
+    let manifest = fetch_manifest(&client).await?;
+    let synced_at = current_sync_time();
 
     if let Some(entry) = cache.as_mut() {
         if entry.dataset.sha256 == manifest.sha256 {
-            entry.next_refresh_at = Instant::now() + REFRESH_INTERVAL;
+            let app_data = state.app_data.clone();
+            let metadata_manifest = manifest.clone();
+            let metadata_synced_at = synced_at.clone();
+            tokio::task::spawn_blocking(move || {
+                VodLibraryCacheStore::new(app_data)
+                    .write_metadata(&metadata_manifest, &metadata_synced_at)
+            })
+            .await
+            .map_err(|error| message(format!("更新歌回快取時發生錯誤：{error}")))??;
+            entry
+                .dataset
+                .schema_version
+                .clone_from(&manifest.schema_version);
+            entry
+                .dataset
+                .published_at
+                .clone_from(&manifest.published_at);
+            entry.dataset.counts.clone_from(&manifest.counts);
+            entry.dataset.synced_at = synced_at;
             return Ok(entry.dataset.clone());
         }
     }
 
-    let dataset = match fetch_snapshot(&client, manifest).await {
-        Ok(dataset) => dataset,
-        Err(error) => return cached_or_error(&mut cache, force_refresh, error),
-    };
+    let (snapshot, snapshot_bytes) = fetch_snapshot(&client, &manifest).await?;
+    let app_data = state.app_data.clone();
+    let cache_manifest = manifest.clone();
+    let cache_synced_at = synced_at.clone();
+    tokio::task::spawn_blocking(move || {
+        VodLibraryCacheStore::new(app_data).write(
+            &cache_manifest,
+            &snapshot_bytes,
+            &cache_synced_at,
+        )
+    })
+    .await
+    .map_err(|error| message(format!("保存歌回快取時發生錯誤：{error}")))??;
+    let dataset = to_library_dataset(manifest, snapshot, synced_at);
 
     *cache = Some(CachedVodLibrary {
         dataset: dataset.clone(),
-        next_refresh_at: Instant::now() + REFRESH_INTERVAL,
     });
     Ok(dataset)
-}
-
-fn cached_or_error(
-    cache: &mut Option<CachedVodLibrary>,
-    force_refresh: bool,
-    error: AppError,
-) -> AppResult<VodLibraryDataset> {
-    if !force_refresh {
-        if let Some(entry) = cache.as_mut() {
-            entry.next_refresh_at = Instant::now() + FAILED_REFRESH_RETRY;
-            return Ok(entry.dataset.clone());
-        }
-    }
-    Err(error)
 }
 
 async fn fetch_manifest(client: &Client) -> AppResult<VodManifest> {
@@ -209,7 +245,10 @@ async fn fetch_manifest(client: &Client) -> AppResult<VodManifest> {
     Ok(manifest)
 }
 
-async fn fetch_snapshot(client: &Client, manifest: VodManifest) -> AppResult<VodLibraryDataset> {
+async fn fetch_snapshot(
+    client: &Client,
+    manifest: &VodManifest,
+) -> AppResult<(VodSnapshot, Vec<u8>)> {
     let response = client
         .get(&manifest.snapshot_url)
         .header("accept", "application/json")
@@ -218,17 +257,8 @@ async fn fetch_snapshot(client: &Client, manifest: VodManifest) -> AppResult<Vod
     assert_json_response(&response, &manifest.snapshot_url, "VOD 資料")?;
     let bytes = read_bytes_with_limit(response, MAX_SNAPSHOT_BYTES).await?;
 
-    if bytes.len() as u64 != manifest.uncompressed_bytes {
-        return Err(message("VOD 資料大小與索引不符"));
-    }
-    let actual_sha256 = hex::encode(Sha256::digest(&bytes));
-    if actual_sha256 != manifest.sha256 {
-        return Err(message("VOD 資料 SHA-256 驗證失敗"));
-    }
-
-    let snapshot: VodSnapshot = parse_json(&bytes, "VOD 資料")?;
-    validate_snapshot(&snapshot, &manifest)?;
-    Ok(to_library_dataset(manifest, snapshot))
+    let snapshot = verified_snapshot_from_bytes(&bytes, manifest)?;
+    Ok((snapshot, bytes))
 }
 
 fn assert_json_response(response: &Response, expected_url: &str, label: &str) -> AppResult<()> {
@@ -262,6 +292,167 @@ async fn read_bytes_with_limit(response: Response, limit: usize) -> AppResult<Ve
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
+}
+
+impl VodLibraryCacheStore {
+    fn new(app_data: PathBuf) -> Self {
+        Self {
+            root: app_data.join(CACHE_DIRECTORY),
+        }
+    }
+
+    fn read(&self) -> AppResult<Option<CachedVodLibrary>> {
+        let metadata_path = self.metadata_path();
+        if !metadata_path.is_file() {
+            return Ok(None);
+        }
+
+        let metadata_bytes =
+            read_file_with_limit(&metadata_path, MAX_MANIFEST_BYTES, "歌回快取索引")?;
+        let metadata: VodCacheMetadata = parse_json(&metadata_bytes, "歌回快取索引")?;
+        if metadata.schema_version != CACHE_SCHEMA_VERSION {
+            return Err(message(format!(
+                "不支援的歌回快取 schema 版本：{}",
+                metadata.schema_version
+            )));
+        }
+        if !is_exact_utc_milliseconds(&metadata.synced_at) {
+            return Err(message("歌回快取的同步時間格式不正確"));
+        }
+        validate_manifest(&metadata.manifest)?;
+
+        let snapshot_path = self.snapshot_path(&metadata.manifest.sha256);
+        let snapshot_bytes =
+            read_file_with_limit(&snapshot_path, MAX_SNAPSHOT_BYTES, "歌回快取資料")?;
+        let snapshot = verified_snapshot_from_bytes(&snapshot_bytes, &metadata.manifest)?;
+        let dataset = to_library_dataset(metadata.manifest, snapshot, metadata.synced_at);
+        Ok(Some(CachedVodLibrary { dataset }))
+    }
+
+    fn write(
+        &self,
+        manifest: &VodManifest,
+        snapshot_bytes: &[u8],
+        synced_at: &str,
+    ) -> AppResult<()> {
+        validate_manifest(manifest)?;
+        if !is_exact_utc_milliseconds(synced_at) {
+            return Err(message("歌回快取的同步時間格式不正確"));
+        }
+        verified_snapshot_from_bytes(snapshot_bytes, manifest)?;
+
+        let snapshots = self.snapshots_path();
+        fs::create_dir_all(&snapshots)?;
+        atomic_write(
+            &self.snapshot_path(&manifest.sha256),
+            snapshot_bytes,
+            "vod-snapshot-",
+        )?;
+        self.write_metadata_file(manifest, synced_at)?;
+        self.remove_old_snapshots(&manifest.sha256);
+        Ok(())
+    }
+
+    fn write_metadata(&self, manifest: &VodManifest, synced_at: &str) -> AppResult<()> {
+        validate_manifest(manifest)?;
+        if !is_exact_utc_milliseconds(synced_at) {
+            return Err(message("歌回快取的同步時間格式不正確"));
+        }
+        if !self.snapshot_path(&manifest.sha256).is_file() {
+            return Err(message("歌回快取缺少已驗證的 snapshot"));
+        }
+
+        let snapshot_bytes = read_file_with_limit(
+            &self.snapshot_path(&manifest.sha256),
+            MAX_SNAPSHOT_BYTES,
+            "歌回快取資料",
+        )?;
+        verified_snapshot_from_bytes(&snapshot_bytes, manifest)?;
+        self.write_metadata_file(manifest, synced_at)
+    }
+
+    fn write_metadata_file(&self, manifest: &VodManifest, synced_at: &str) -> AppResult<()> {
+        fs::create_dir_all(&self.root)?;
+        let metadata = VodCacheMetadata {
+            schema_version: CACHE_SCHEMA_VERSION,
+            synced_at: synced_at.to_owned(),
+            manifest: manifest.clone(),
+        };
+        let mut bytes = serde_json::to_vec_pretty(&metadata)?;
+        bytes.push(b'\n');
+        atomic_write(&self.metadata_path(), &bytes, "vod-cache-")
+    }
+
+    fn remove_old_snapshots(&self, current_sha256: &str) {
+        let Ok(entries) = fs::read_dir(self.snapshots_path()) else {
+            return;
+        };
+        let current_name = format!("{current_sha256}.json");
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_file() && entry.file_name() != current_name.as_str() {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    fn metadata_path(&self) -> PathBuf {
+        self.root.join(CACHE_METADATA_FILE)
+    }
+
+    fn snapshots_path(&self) -> PathBuf {
+        self.root.join(CACHE_SNAPSHOTS_DIRECTORY)
+    }
+
+    fn snapshot_path(&self, sha256: &str) -> PathBuf {
+        self.snapshots_path().join(format!("{sha256}.json"))
+    }
+}
+
+fn read_file_with_limit(path: &Path, limit: usize, label: &str) -> AppResult<Vec<u8>> {
+    let bytes = fs::read(path)?;
+    if bytes.len() > limit {
+        return Err(message(format!("{label}超過 {limit} bytes 安全上限")));
+    }
+    Ok(bytes)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8], prefix: &str) -> AppResult<()> {
+    let parent = path.parent().ok_or_else(|| message("歌回快取路徑無效"))?;
+    fs::create_dir_all(parent)?;
+    let mut temp = tempfile::Builder::new()
+        .prefix(prefix)
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    {
+        let mut writer = BufWriter::new(temp.as_file_mut());
+        writer.write_all(bytes)?;
+        writer.flush()?;
+    }
+    temp.as_file().sync_all()?;
+    temp.persist(path)?;
+    sync_directory(parent);
+    Ok(())
+}
+
+fn verified_snapshot_from_bytes(bytes: &[u8], manifest: &VodManifest) -> AppResult<VodSnapshot> {
+    if bytes.len() as u64 != manifest.uncompressed_bytes {
+        return Err(message("VOD 資料大小與索引不符"));
+    }
+    let actual_sha256 = hex::encode(Sha256::digest(bytes));
+    if actual_sha256 != manifest.sha256 {
+        return Err(message("VOD 資料 SHA-256 驗證失敗"));
+    }
+
+    let snapshot: VodSnapshot = parse_json(bytes, "VOD 資料")?;
+    validate_snapshot(&snapshot, manifest)?;
+    Ok(snapshot)
+}
+
+fn current_sync_time() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn parse_json<T>(bytes: &[u8], label: &str) -> AppResult<T>
@@ -561,10 +752,15 @@ fn is_exact_utc_milliseconds(value: &str) -> bool {
         && DateTime::parse_from_rfc3339(value).is_ok()
 }
 
-fn to_library_dataset(manifest: VodManifest, snapshot: VodSnapshot) -> VodLibraryDataset {
+fn to_library_dataset(
+    manifest: VodManifest,
+    snapshot: VodSnapshot,
+    synced_at: String,
+) -> VodLibraryDataset {
     VodLibraryDataset {
         schema_version: snapshot.schema_version,
         published_at: manifest.published_at,
+        synced_at,
         sha256: manifest.sha256,
         counts: manifest.counts,
         streamers: snapshot
@@ -602,6 +798,16 @@ fn to_library_dataset(manifest: VodManifest, snapshot: VodSnapshot) -> VodLibrar
 fn message(value: impl Into<String>) -> AppError {
     AppError::Message(value.into())
 }
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) {
+    if let Ok(directory) = fs::File::open(path) {
+        let _ = directory.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {
@@ -647,6 +853,16 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    fn cache_fixture() -> (VodManifest, Vec<u8>) {
+        let bytes = serde_json::to_vec(&snapshot()).unwrap();
+        let sha256 = hex::encode(Sha256::digest(&bytes));
+        let mut manifest = manifest();
+        manifest.snapshot_url = format!("{SNAPSHOT_PREFIX}{sha256}.json");
+        manifest.sha256 = sha256;
+        manifest.uncompressed_bytes = bytes.len() as u64;
+        (manifest, bytes)
     }
 
     #[test]
@@ -696,5 +912,54 @@ mod tests {
         .is_err());
         assert!(validate_display_text(" spaced ", "title").is_err());
         assert!(validate_display_text("e\u{301}", "title").is_err());
+    }
+
+    #[test]
+    fn persists_and_revalidates_the_last_known_good_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VodLibraryCacheStore::new(temp.path().to_owned());
+        let (manifest, bytes) = cache_fixture();
+        let synced_at = "2026-07-15T12:00:00.000Z";
+
+        store.write(&manifest, &bytes, synced_at).unwrap();
+        let cached = store.read().unwrap().unwrap();
+
+        assert_eq!(cached.dataset.sha256, manifest.sha256);
+        assert_eq!(cached.dataset.synced_at, synced_at);
+        assert_eq!(cached.dataset.counts, manifest.counts);
+        assert_eq!(cached.dataset.streamers[0].display_name, "涅默 Nemesis");
+    }
+
+    #[test]
+    fn rejects_a_corrupted_persistent_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VodLibraryCacheStore::new(temp.path().to_owned());
+        let (manifest, bytes) = cache_fixture();
+        store
+            .write(&manifest, &bytes, "2026-07-15T12:00:00.000Z")
+            .unwrap();
+
+        fs::write(store.snapshot_path(&manifest.sha256), b"{}\n").unwrap();
+
+        assert!(store.read().is_err());
+    }
+
+    #[test]
+    fn records_a_successful_manifest_sync_without_rewriting_the_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VodLibraryCacheStore::new(temp.path().to_owned());
+        let (manifest, bytes) = cache_fixture();
+        store
+            .write(&manifest, &bytes, "2026-07-15T12:00:00.000Z")
+            .unwrap();
+
+        store
+            .write_metadata(&manifest, "2026-07-16T13:30:00.000Z")
+            .unwrap();
+
+        assert_eq!(
+            store.read().unwrap().unwrap().dataset.synced_at,
+            "2026-07-16T13:30:00.000Z"
+        );
     }
 }

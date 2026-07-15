@@ -100,6 +100,7 @@ export interface VodLibraryStreamer {
 export interface VodLibraryDataset {
   schemaVersion: string;
   publishedAt: string;
+  syncedAt: string;
   sha256: string;
   counts: VodLibraryCounts;
   streamers: VodLibraryStreamer[];

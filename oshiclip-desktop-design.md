@@ -125,7 +125,7 @@ graph TD
         BinMgr["Binary Manager<br/>下載 / 驗證 / 切換"]
         ExecEngine["Execution Engine<br/>spawn / 進度解析 / 取消"]
         Manifest["Manifest Store<br/>版本狀態的唯一真相"]
-        VodFeed["VOD Feed Consumer<br/>fetch / 驗證 / last-known-good"]
+        VodFeed["VOD Feed Consumer<br/>fetch / 驗證 / 持久快取"]
     end
 
     subgraph External["外部"]
@@ -163,7 +163,7 @@ graph TD
 | **Binary Manager** | 查詢可用版本、下載、SHA256 驗證、原子安裝、切換 selected、移除版本。是 §6 的實作主體。 |
 | **Execution Engine** | 以 argv spawn yt-dlp、串流 stdout/stderr、解析進度並 emit 事件、支援取消（kill 子行程樹）。 |
 | **Manifest Store** | 讀寫 `manifest.json`，是「哪些版本已安裝 / 當前選哪個」的**唯一真相來源**。 |
-| **VOD Feed Consumer** | 從固定 `data.oshi.tw` v1 manifest 取得 immutable snapshot，完成大小、SHA256、schema 與語意驗證，並保留 last-known-good 記憶體快取。 |
+| **VOD Feed Consumer** | 從固定 `data.oshi.tw` v1 manifest 取得 immutable snapshot，完成大小、SHA256、schema 與語意驗證，並保留可跨重啟使用的 last-known-good 磁碟快取。 |
 
 ---
 
@@ -221,6 +221,9 @@ sequenceDiagram
 │       └── v2.9.2/
 │           └── deno             (Windows: deno.exe)
 ├── downloads/                   # 下載暫存區；完成驗證後才 move 進 bin/
+├── vod-library/
+│   ├── cache.json              # cache schema、上次同步時間與已驗證 manifest
+│   └── snapshots/{sha256}.json # content-addressed last-known-good 原始資料
 └── manifest.json                # 版本狀態的唯一真相
 ```
 
@@ -533,21 +536,30 @@ sequenceDiagram
 sequenceDiagram
     participant UI as 歌回資料庫 UI
     participant Rust as VOD Feed Consumer
+    participant Cache as App Data Cache
     participant Data as data.oshi.tw
-    UI->>Rust: get_vod_library(forceRefresh)
-    Rust->>Data: GET 固定 manifest.json
-    Data-->>Rust: hash / URL / bytes / counts
-    alt hash 與快取相同
-        Rust-->>UI: last-known-good dataset
-    else 新 hash
-        Rust->>Data: GET immutable snapshot
-        Rust->>Rust: length + SHA256 + schema + semantics
-        Rust-->>UI: 原子替換後的顯示模型
+    UI->>Rust: get_vod_library(false)
+    Rust->>Cache: 讀取 manifest + snapshot
+    Cache-->>Rust: last-known-good
+    Rust->>Rust: 重驗 length + SHA256 + schema + semantics
+    Rust-->>UI: 立即顯示快取並常駐 App state
+    alt syncedAt 已超過 24 小時或使用者按同步
+        UI->>Rust: get_vod_library(true)
+        Rust->>Data: GET 固定 manifest.json
+        Data-->>Rust: hash / URL / bytes / counts
+        alt hash 與快取相同
+            Rust->>Cache: 原子更新 syncedAt
+        else 新 hash
+            Rust->>Data: GET immutable snapshot
+            Rust->>Rust: length + SHA256 + schema + semantics
+            Rust->>Cache: snapshot 先寫，metadata 後原子切換
+        end
+        Rust-->>UI: 更新後的顯示模型
     end
     UI->>UI: 選擇歌曲 → 只預填下載表單
 ```
 
-候選資料失敗時不覆蓋已驗證快取。一般頁面重入可沿用快取；明確按「更新資料」時錯誤會回到 UI，讓使用者知道 production refresh 未成功。
+候選資料失敗時不覆蓋已驗證快取。React App 在啟動後只取得一次資料集並跨分頁保留；磁碟快取讓重新啟動也不必先等網路。快取超過 24 小時才背景同步，也可按 icon 手動同步；失敗會回報 UI，但仍可繼續搜尋 last-known-good 資料。
 
 ---
 
@@ -714,7 +726,7 @@ fn remove_tool_version(state: State<'_, AppState>, tool: Tool, version: String)
 - 前端採 React + TypeScript + Vite。
 - 工具保持執行期下載，不內嵌於 app bundle。
 - `oshiclip://` 與 legacy `oshi-vods://` 只允許 `download` host，並白名單驗證 video ID、整數時間與檔名；連結只預填，不自動執行。
-- `data.oshi.tw` 只能由 Rust 後端透過固定 v1 路徑讀取；候選 snapshot 完整驗證後才會替換快取，選歌同樣只預填、不自動下載。
+- `data.oshi.tw` 只能由 Rust 後端透過固定 v1 路徑讀取；候選 snapshot 完整驗證後才會原子替換磁碟快取。上次成功同步超過 24 小時時，每次 App 啟動最多背景嘗試一次；選歌同樣只預填、不自動下載。
 
 待決策：
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   CalendarDays,
@@ -16,7 +16,6 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { getVodLibrary } from "../lib/desktop";
 import { formatDuration, formatTimecode } from "../lib/time";
 import {
   filterVodLibraryCards,
@@ -30,8 +29,13 @@ import type { DownloadPrefill, VodLibraryDataset } from "../types";
 const PAGE_SIZE = 18;
 
 interface VodLibraryViewProps {
+  dataset: VodLibraryDataset | null;
+  loading: boolean;
+  syncing: boolean;
+  error: string | null;
+  syncError: string | null;
+  onSync: () => Promise<void>;
   onChoose: (prefill: DownloadPrefill) => void;
-  notify: (message: string, tone?: "success" | "error" | "info") => void;
 }
 
 function publishedLabel(value: string): string {
@@ -54,50 +58,20 @@ function monogram(value: string): string {
   return Array.from(value.trim())[0]?.toLocaleUpperCase("zh-TW") ?? "推";
 }
 
-export function VodLibraryView({ onChoose, notify }: VodLibraryViewProps) {
-  const [dataset, setDataset] = useState<VodLibraryDataset | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export function VodLibraryView({
+  dataset,
+  loading,
+  syncing,
+  error,
+  syncError,
+  onSync,
+  onChoose,
+}: VodLibraryViewProps) {
   const [query, setQuery] = useState("");
   const [streamerSlug, setStreamerSlug] = useState("");
   const [sort, setSort] = useState<VodLibrarySort>("newest");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-
-  const loadDataset = useCallback(
-    async (forceRefresh = false) => {
-      if (forceRefresh) setRefreshing(true);
-      else if (!dataset) setLoading(true);
-      setError(null);
-      try {
-        const next = await getVodLibrary(forceRefresh);
-        const changed = Boolean(dataset && dataset.sha256 !== next.sha256);
-        setDataset(next);
-        if (forceRefresh) {
-          notify(
-            changed ? "歌回資料庫已更新。" : "歌回資料庫已是最新版本。",
-            "success",
-          );
-        }
-      } catch (loadError) {
-        const message = loadError instanceof Error ? loadError.message : String(loadError);
-        if (dataset) notify(`無法更新歌回資料庫：${message}`, "error");
-        else setError(message);
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [dataset, notify],
-  );
-
-  useEffect(() => {
-    void loadDataset();
-    // The initial request intentionally runs only on mount. Explicit refreshes
-    // use the button below so filter changes never trigger network activity.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
@@ -119,8 +93,8 @@ export function VodLibraryView({ onChoose, notify }: VodLibraryViewProps) {
       <section className="library-view">
         <div className="library-state-card">
           <LoaderCircle className="spin" size={28} />
-          <strong>正在驗證 data.oshi.tw 資料…</strong>
-          <p>第一次載入會下載目前的 VOD snapshot，通過 SHA-256 與 schema 檢查後才顯示。</p>
+          <strong>正在載入本機歌回快取…</strong>
+          <p>已有快取會立即顯示；第一次使用才需要下載並驗證目前的 VOD snapshot。</p>
         </div>
       </section>
     );
@@ -133,8 +107,13 @@ export function VodLibraryView({ onChoose, notify }: VodLibraryViewProps) {
           <AlertCircle size={29} />
           <strong>目前無法載入歌回資料庫</strong>
           <p>{error ?? "沒有可用的資料。"}</p>
-          <button className="button light" type="button" onClick={() => void loadDataset()}>
-            <RefreshCw size={15} /> 再試一次
+          <button
+            className="button light"
+            type="button"
+            disabled={syncing}
+            onClick={() => void onSync()}
+          >
+            <RefreshCw className={syncing ? "spin" : undefined} size={15} /> 再試一次
           </button>
         </div>
       </section>
@@ -168,18 +147,34 @@ export function VodLibraryView({ onChoose, notify }: VodLibraryViewProps) {
           <span className="summary-icon coral"><Music2 size={18} /></span>
           <p><small>歌曲片段</small><strong>{dataset.counts.performances.toLocaleString("zh-TW")}</strong></p>
         </div>
-        <div className="library-source">
-          <span><ShieldCheck size={16} /> {dataset.sha256 === "preview" ? "預覽資料" : "SHA-256 已驗證"}</span>
-          <small>data.oshi.tw · {publishedLabel(dataset.publishedAt)}</small>
+        <div
+          className={syncError ? "library-source warning" : "library-source"}
+          title={syncError ? `同步失敗：${syncError}` : undefined}
+          aria-live="polite"
+        >
+          <span>
+            {syncError ? <AlertCircle size={16} /> : <ShieldCheck size={16} />}
+            {dataset.sha256 === "preview"
+              ? "預覽資料"
+              : syncError
+                ? "使用已驗證快取"
+                : syncing
+                  ? "正在背景同步"
+                  : "SHA-256 已驗證"}
+          </span>
+          <small>上次同步 {publishedLabel(dataset.syncedAt)}</small>
+          <small>資料發布 {publishedLabel(dataset.publishedAt)}</small>
         </div>
         <button
           type="button"
           className="button light library-refresh"
-          disabled={refreshing}
-          onClick={() => void loadDataset(true)}
+          aria-label="同步歌回資料庫"
+          title={syncing ? "正在同步歌回資料庫" : "立即同步歌回資料庫"}
+          disabled={syncing}
+          onClick={() => void onSync()}
         >
-          <RefreshCw className={refreshing ? "spin" : undefined} size={15} />
-          更新資料
+          <RefreshCw className={syncing ? "spin" : undefined} size={16} />
+          <span className="sr-only">同步歌回資料庫</span>
         </button>
       </div>
 
@@ -242,7 +237,7 @@ export function VodLibraryView({ onChoose, notify }: VodLibraryViewProps) {
           <p>換個歌曲名稱、原唱或 VTuber 名稱再試一次。</p>
         </div>
       ) : (
-        <div className="library-list" aria-busy={refreshing}>
+        <div className="library-list" aria-busy={syncing}>
           {visibleCards.map((card) => {
             const expanded = card.id === expandedId;
             const matchingPerformances = matchingVodPerformances(card, query);

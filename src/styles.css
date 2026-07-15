@@ -1038,6 +1038,8 @@ summary:focus-visible {
   font-weight: 760;
 }
 
+.library-source.warning > span { color: #a65b48; }
+
 .library-source > small {
   overflow: hidden;
   max-width: 100%;
@@ -1045,7 +1047,14 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
-.library-refresh { align-self: stretch; white-space: nowrap; }
+.library-refresh {
+  align-self: center;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  padding: 0;
+  white-space: nowrap;
+}
 
 .library-toolbar {
   display: grid;
@@ -1994,6 +2003,7 @@ html[data-theme="dark"] .library-card.expanded { border-color: #6469ad; }
 html[data-theme="dark"] .library-song-panel { border-color: #343e4e; background: #141b29; }
 html[data-theme="dark"] .library-state-card { color: #b1b3ff; background: rgb(25 33 49 / 78%); }
 html[data-theme="dark"] .library-source > span { color: #82d2b3; }
+html[data-theme="dark"] .library-source.warning > span { color: #f0a28e; }
 
 html[data-theme="dark"] .choice-check { color: #dce0e9; border-color: #465064; background: #192131; }
 html[data-theme="dark"] .selected > .choice-check { color: #14201c; border-color: var(--mint); background: var(--mint); }

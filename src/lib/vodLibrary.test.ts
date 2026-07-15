@@ -4,12 +4,14 @@ import {
   makeVodLibraryCards,
   matchingVodPerformances,
   performanceToDownloadPrefill,
+  shouldAutoSyncVodLibrary,
 } from "./vodLibrary";
 import type { VodLibraryDataset } from "../types";
 
 const DATASET: VodLibraryDataset = {
   schemaVersion: "1.0.0",
   publishedAt: "2026-07-11T20:04:22.682Z",
+  syncedAt: "2026-07-15T12:00:00.000Z",
   sha256: "abc",
   counts: { streamers: 2, vods: 2, performances: 3 },
   streamers: [
@@ -64,6 +66,26 @@ const DATASET: VodLibraryDataset = {
     },
   ],
 };
+
+describe("shouldAutoSyncVodLibrary", () => {
+  const now = Date.parse("2026-07-16T12:00:00.000Z");
+
+  it("syncs at 24 hours but keeps a newer cache", () => {
+    expect(
+      shouldAutoSyncVodLibrary("2026-07-15T12:00:00.001Z", now),
+    ).toBe(false);
+    expect(
+      shouldAutoSyncVodLibrary("2026-07-15T12:00:00.000Z", now),
+    ).toBe(true);
+  });
+
+  it("recovers from invalid or implausibly future timestamps", () => {
+    expect(shouldAutoSyncVodLibrary("invalid", now)).toBe(true);
+    expect(
+      shouldAutoSyncVodLibrary("2026-07-16T12:06:00.000Z", now),
+    ).toBe(true);
+  });
+});
 
 describe("VOD library helpers", () => {
   const cards = makeVodLibraryCards(DATASET);
