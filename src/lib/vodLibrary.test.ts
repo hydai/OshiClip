@@ -18,6 +18,7 @@ const DATASET: VodLibraryDataset = {
     {
       slug: "alpha",
       displayName: "Alpha",
+      avatarUrl: "https://yt3.googleusercontent.com/alpha",
       group: "Group A",
       vods: [
         {
@@ -46,6 +47,7 @@ const DATASET: VodLibraryDataset = {
     {
       slug: "beta",
       displayName: "Beta",
+      avatarUrl: null,
       group: null,
       vods: [
         {

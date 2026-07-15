@@ -12,10 +12,12 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Sparkles,
   Users,
   Video,
   X,
 } from "lucide-react";
+import { VodStreamerAvatar } from "../components/VodStreamerAvatar";
 import { formatDuration, formatTimecode } from "../lib/time";
 import {
   filterVodLibraryCards,
@@ -54,10 +56,6 @@ function dateLabel(value: string): string {
   return value.replaceAll("-", ".");
 }
 
-function monogram(value: string): string {
-  return Array.from(value.trim())[0]?.toLocaleUpperCase("zh-TW") ?? "推";
-}
-
 export function VodLibraryView({
   dataset,
   loading,
@@ -78,8 +76,22 @@ export function VodLibraryView({
     setExpandedId(null);
   }, [query, streamerSlug, sort]);
 
+  useEffect(() => {
+    if (
+      streamerSlug &&
+      dataset &&
+      !dataset.streamers.some((streamer) => streamer.slug === streamerSlug)
+    ) {
+      setStreamerSlug("");
+    }
+  }, [dataset, streamerSlug]);
+
   const cards = useMemo(
     () => (dataset ? makeVodLibraryCards(dataset) : []),
+    [dataset],
+  );
+  const pickableStreamers = useMemo(
+    () => dataset?.streamers.filter((streamer) => streamer.vods.length > 0) ?? [],
     [dataset],
   );
   const filteredCards = useMemo(
@@ -195,15 +207,6 @@ export function VodLibraryView({
             </button>
           )}
         </div>
-        <label className="library-select">
-          <span>VTuber</span>
-          <select value={streamerSlug} onChange={(event) => setStreamerSlug(event.target.value)}>
-            <option value="">全部 VTuber</option>
-            {dataset.streamers.map((streamer) => (
-              <option value={streamer.slug} key={streamer.slug}>{streamer.displayName}</option>
-            ))}
-          </select>
-        </label>
         <label className="library-select compact">
           <span>排序</span>
           <select value={sort} onChange={(event) => setSort(event.target.value as VodLibrarySort)}>
@@ -212,6 +215,41 @@ export function VodLibraryView({
           </select>
         </label>
       </div>
+
+      <section className="library-talent-picker" aria-labelledby="library-talent-heading">
+        <div className="library-talent-heading">
+          <span>快速篩選</span>
+          <strong id="library-talent-heading">選擇 VTuber</strong>
+        </div>
+        <div className="library-talent-rail">
+          <button
+            type="button"
+            className={!streamerSlug ? "library-talent-chip active" : "library-talent-chip"}
+            aria-pressed={!streamerSlug}
+            onClick={() => setStreamerSlug("")}
+          >
+            <span className="all-streamers-mark" aria-hidden="true">
+              <Sparkles size={18} />
+            </span>
+            <span>全部</span>
+            <small>{cards.length.toLocaleString("zh-TW")} 場</small>
+          </button>
+          {pickableStreamers.map((streamer) => (
+            <button
+              type="button"
+              className={streamerSlug === streamer.slug ? "library-talent-chip active" : "library-talent-chip"}
+              aria-pressed={streamerSlug === streamer.slug}
+              title={streamer.displayName}
+              onClick={() => setStreamerSlug(streamer.slug)}
+              key={streamer.slug}
+            >
+              <VodStreamerAvatar streamer={streamer} size="picker" />
+              <span>{streamer.displayName}</span>
+              <small>{streamer.vods.length.toLocaleString("zh-TW")} 場</small>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <div className="library-results-heading">
         <p role="status">
@@ -250,9 +288,7 @@ export function VodLibraryView({
                   aria-expanded={expanded}
                   onClick={() => setExpandedId(expanded ? null : card.id)}
                 >
-                  <span className="streamer-monogram" aria-hidden="true">
-                    {monogram(card.streamer.displayName)}
-                  </span>
+                  <VodStreamerAvatar streamer={card.streamer} />
                   <span className="library-card-copy">
                     <span className="library-card-meta">
                       <strong>{card.streamer.displayName}</strong>

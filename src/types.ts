@@ -102,6 +102,7 @@ export interface VodLibraryVod {
 export interface VodLibraryStreamer {
   slug: string;
   displayName: string;
+  avatarUrl: string | null;
   group: string | null;
   vods: VodLibraryVod[];
 }

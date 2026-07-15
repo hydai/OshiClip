@@ -2,6 +2,7 @@ use crate::{
     error::{AppError, AppResult},
     AppState,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use futures_util::StreamExt;
 use reqwest::{header::CONTENT_TYPE, Client, Response, StatusCode};
@@ -23,11 +24,19 @@ const MANIFEST_URL: &str = "https://data.oshi.tw/vod/v1/manifest.json";
 const SNAPSHOT_PREFIX: &str = "https://data.oshi.tw/vod/v1/snapshots/";
 const MAX_MANIFEST_BYTES: usize = 65_536;
 const MAX_SNAPSHOT_BYTES: usize = 10_485_760;
+const MAX_AVATAR_BYTES: usize = 2_097_152;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const CACHE_SCHEMA_VERSION: u32 = 1;
 const CACHE_DIRECTORY: &str = "vod-library";
 const CACHE_METADATA_FILE: &str = "cache.json";
 const CACHE_SNAPSHOTS_DIRECTORY: &str = "snapshots";
+const CACHE_AVATARS_DIRECTORY: &str = "avatars";
+const AVATAR_HOSTS: &[&str] = &[
+    "yt3.ggpht.com",
+    "yt4.ggpht.com",
+    "yt3.googleusercontent.com",
+    "lh3.googleusercontent.com",
+];
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -107,6 +116,7 @@ pub struct VodLibraryDataset {
 pub struct VodLibraryStreamer {
     pub slug: String,
     pub display_name: String,
+    pub avatar_url: Option<String>,
     pub group: Option<String>,
     pub vods: Vec<VodLibraryVod>,
 }
@@ -232,6 +242,49 @@ pub async fn get_vod_library(
     Ok(dataset)
 }
 
+#[tauri::command]
+pub async fn get_vod_streamer_avatar(
+    state: State<'_, AppState>,
+    streamer_slug: String,
+) -> AppResult<Option<String>> {
+    validate_slug(&streamer_slug)?;
+    let avatar_url = {
+        let cache = state.vod_library_cache.lock().await;
+        let dataset = cache
+            .as_ref()
+            .ok_or_else(|| message("歌回資料庫尚未載入"))?;
+        let streamer = dataset
+            .dataset
+            .streamers
+            .iter()
+            .find(|streamer| streamer.slug == streamer_slug)
+            .ok_or_else(|| message("找不到指定的 VTuber"))?;
+        streamer.avatar_url.clone()
+    };
+
+    let Some(avatar_url) = avatar_url else {
+        return Ok(None);
+    };
+    validate_safe_url(&avatar_url, AVATAR_HOSTS, "VTuber 頭像")?;
+
+    let store = VodLibraryCacheStore::new(state.app_data.clone());
+    let cached_store = store.clone();
+    let cached_url = avatar_url.clone();
+    if let Some(bytes) = tokio::task::spawn_blocking(move || cached_store.read_avatar(&cached_url))
+        .await
+        .map_err(|error| message(format!("讀取 VTuber 頭像快取時發生錯誤：{error}")))??
+    {
+        return Ok(Some(avatar_data_url(&bytes)?));
+    }
+
+    let bytes = fetch_avatar(&vod_client()?, &avatar_url).await?;
+    let data_url = avatar_data_url(&bytes)?;
+    tokio::task::spawn_blocking(move || store.write_avatar(&avatar_url, &bytes))
+        .await
+        .map_err(|error| message(format!("保存 VTuber 頭像快取時發生錯誤：{error}")))??;
+    Ok(Some(data_url))
+}
+
 async fn fetch_manifest(client: &Client) -> AppResult<VodManifest> {
     let response = client
         .get(MANIFEST_URL)
@@ -259,6 +312,48 @@ async fn fetch_snapshot(
 
     let snapshot = verified_snapshot_from_bytes(&bytes, manifest)?;
     Ok((snapshot, bytes))
+}
+
+async fn fetch_avatar(client: &Client, avatar_url: &str) -> AppResult<Vec<u8>> {
+    validate_safe_url(avatar_url, AVATAR_HOSTS, "VTuber 頭像")?;
+    let response = client
+        .get(avatar_url)
+        .header("accept", "image/webp,image/png,image/jpeg,image/gif")
+        .send()
+        .await?;
+    if response.status() != StatusCode::OK || response.url().as_str() != avatar_url {
+        return Err(message(format!(
+            "VTuber 頭像回應不正確（HTTP {}）",
+            response.status()
+        )));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_AVATAR_BYTES as u64)
+    {
+        return Err(message("VTuber 頭像超過安全大小上限"));
+    }
+    let declared_media_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .map(str::to_ascii_lowercase);
+    if !matches!(
+        declared_media_type.as_deref(),
+        Some("image/jpeg" | "image/png" | "image/webp" | "image/gif")
+    ) {
+        return Err(message("VTuber 頭像格式不受支援"));
+    }
+
+    let bytes = read_bytes_with_limit(response, MAX_AVATAR_BYTES).await?;
+    let actual_media_type =
+        avatar_media_type(&bytes).ok_or_else(|| message("VTuber 頭像內容不是受支援的圖片"))?;
+    if declared_media_type.as_deref() != Some(actual_media_type) {
+        return Err(message("VTuber 頭像格式與內容不一致"));
+    }
+    Ok(bytes)
 }
 
 fn assert_json_response(response: &Response, expected_url: &str, label: &str) -> AppResult<()> {
@@ -383,6 +478,33 @@ impl VodLibraryCacheStore {
         atomic_write(&self.metadata_path(), &bytes, "vod-cache-")
     }
 
+    fn read_avatar(&self, avatar_url: &str) -> AppResult<Option<Vec<u8>>> {
+        let path = self.avatar_path(avatar_url);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = match read_file_with_limit(&path, MAX_AVATAR_BYTES, "VTuber 頭像快取") {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                let _ = fs::remove_file(path);
+                return Ok(None);
+            }
+        };
+        if avatar_media_type(&bytes).is_none() {
+            let _ = fs::remove_file(path);
+            return Ok(None);
+        }
+        Ok(Some(bytes))
+    }
+
+    fn write_avatar(&self, avatar_url: &str, bytes: &[u8]) -> AppResult<()> {
+        validate_safe_url(avatar_url, AVATAR_HOSTS, "VTuber 頭像")?;
+        if bytes.len() > MAX_AVATAR_BYTES || avatar_media_type(bytes).is_none() {
+            return Err(message("VTuber 頭像快取內容不正確"));
+        }
+        atomic_write(&self.avatar_path(avatar_url), bytes, "vod-avatar-")
+    }
+
     fn remove_old_snapshots(&self, current_sha256: &str) {
         let Ok(entries) = fs::read_dir(self.snapshots_path()) else {
             return;
@@ -409,6 +531,36 @@ impl VodLibraryCacheStore {
     fn snapshot_path(&self, sha256: &str) -> PathBuf {
         self.snapshots_path().join(format!("{sha256}.json"))
     }
+
+    fn avatar_path(&self, avatar_url: &str) -> PathBuf {
+        let key = hex::encode(Sha256::digest(avatar_url.as_bytes()));
+        self.root
+            .join(CACHE_AVATARS_DIRECTORY)
+            .join(format!("{key}.img"))
+    }
+}
+
+fn avatar_media_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else {
+        None
+    }
+}
+
+fn avatar_data_url(bytes: &[u8]) -> AppResult<String> {
+    let media_type =
+        avatar_media_type(bytes).ok_or_else(|| message("VTuber 頭像內容不是受支援的圖片"))?;
+    Ok(format!(
+        "data:{media_type};base64,{}",
+        BASE64_STANDARD.encode(bytes)
+    ))
 }
 
 fn read_file_with_limit(path: &Path, limit: usize, label: &str) -> AppResult<Vec<u8>> {
@@ -539,16 +691,7 @@ fn validate_snapshot(snapshot: &VodSnapshot, manifest: &VodManifest) -> AppResul
         previous_slug = Some(&streamer.slug);
 
         if let Some(avatar_url) = streamer.avatar_url.0.as_deref() {
-            validate_safe_url(
-                avatar_url,
-                &[
-                    "yt3.ggpht.com",
-                    "yt4.ggpht.com",
-                    "yt3.googleusercontent.com",
-                    "lh3.googleusercontent.com",
-                ],
-                "VTuber 頭像",
-            )?;
+            validate_safe_url(avatar_url, AVATAR_HOSTS, "VTuber 頭像")?;
         }
         validate_social_links(&streamer.social_links)?;
         if streamer.vods.len() > 10_000 {
@@ -769,6 +912,7 @@ fn to_library_dataset(
             .map(|streamer| VodLibraryStreamer {
                 slug: streamer.slug,
                 display_name: streamer.display_name,
+                avatar_url: streamer.avatar_url.0,
                 group: streamer.group.0,
                 vods: streamer
                     .vods
@@ -835,7 +979,9 @@ mod tests {
                 slug: "nagi".into(),
                 display_name: "涅默 Nemesis".into(),
                 youtube_channel_id: "channel-id".into(),
-                avatar_url: RequiredNullableString(None),
+                avatar_url: RequiredNullableString(Some(
+                    "https://yt3.googleusercontent.com/avatar".into(),
+                )),
                 group: RequiredNullableString(Some("極深空計畫".into())),
                 social_links: BTreeMap::new(),
                 vods: vec![Vod {
@@ -928,6 +1074,28 @@ mod tests {
         assert_eq!(cached.dataset.synced_at, synced_at);
         assert_eq!(cached.dataset.counts, manifest.counts);
         assert_eq!(cached.dataset.streamers[0].display_name, "涅默 Nemesis");
+        assert_eq!(
+            cached.dataset.streamers[0].avatar_url.as_deref(),
+            Some("https://yt3.googleusercontent.com/avatar")
+        );
+    }
+
+    #[test]
+    fn persists_valid_avatars_and_discards_corrupted_cache_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VodLibraryCacheStore::new(temp.path().to_owned());
+        let avatar_url = "https://yt3.googleusercontent.com/avatar";
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10];
+
+        store.write_avatar(avatar_url, &jpeg).unwrap();
+        assert_eq!(store.read_avatar(avatar_url).unwrap(), Some(jpeg.to_vec()));
+        assert!(avatar_data_url(&jpeg)
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,"));
+
+        fs::write(store.avatar_path(avatar_url), b"not an image").unwrap();
+        assert_eq!(store.read_avatar(avatar_url).unwrap(), None);
+        assert!(!store.avatar_path(avatar_url).exists());
     }
 
     #[test]

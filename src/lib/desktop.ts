@@ -80,6 +80,7 @@ let browserStatus: AppStatus = {
 
 const browserEvents = new EventTarget();
 let simulationTimer: number | null = null;
+const vodAvatarRequests = new Map<string, Promise<string | null>>();
 let browserHistory: DownloadHistoryEntry[] = [
   {
     id: "preview-history-1",
@@ -117,6 +118,7 @@ let browserVodLibrary: VodLibraryDataset = {
     {
       slug: "earendel",
       displayName: "Earendel ch. 厄倫蒂兒",
+      avatarUrl: null,
       group: "春魚創意",
       vods: [
         {
@@ -143,6 +145,7 @@ let browserVodLibrary: VodLibraryDataset = {
     {
       slug: "nagi",
       displayName: "涅默 Nemesis",
+      avatarUrl: null,
       group: "極深空計畫",
       vods: [
         {
@@ -481,6 +484,27 @@ export async function getVodLibrary(
     };
   }
   return structuredClone(browserVodLibrary);
+}
+
+export function getVodStreamerAvatar(
+  streamerSlug: string,
+  avatarUrl: string | null,
+): Promise<string | null> {
+  if (!avatarUrl) return Promise.resolve(null);
+  if (!isDesktopRuntime) return Promise.resolve(avatarUrl);
+
+  const key = `${streamerSlug}\u0000${avatarUrl}`;
+  const existing = vodAvatarRequests.get(key);
+  if (existing) return existing;
+
+  const request = invoke<string | null>("get_vod_streamer_avatar", {
+    streamerSlug,
+  }).catch((error) => {
+    vodAvatarRequests.delete(key);
+    throw error;
+  });
+  vodAvatarRequests.set(key, request);
+  return request;
 }
 
 export async function onDesktopEvent<Name extends DesktopEventName>(

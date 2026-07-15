@@ -92,6 +92,7 @@ pub fn run() {
             binary_manager::switch_tool_version,
             binary_manager::remove_tool_version,
             vod_library::get_vod_library,
+            vod_library::get_vod_streamer_avatar,
         ])
         .run(tauri::generate_context!())
         .expect("error while running OshiClip");
