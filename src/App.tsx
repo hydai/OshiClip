@@ -5,6 +5,7 @@ import {
   FolderDown,
   History,
   Library,
+  ListMusic,
   RefreshCw,
   Settings2,
   Sparkles,
@@ -12,6 +13,7 @@ import {
 } from "lucide-react";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { DownloadView } from "./views/DownloadView";
+import { AuroraView } from "./views/AuroraView";
 import { HistoryView } from "./views/HistoryView";
 import { SettingsView } from "./views/SettingsView";
 import { ToolsView } from "./views/ToolsView";
@@ -42,7 +44,13 @@ import type {
   VodLibraryDataset,
 } from "./types";
 
-type ViewName = "download" | "library" | "tools" | "history" | "settings";
+type ViewName =
+  | "download"
+  | "library"
+  | "aurora"
+  | "tools"
+  | "history"
+  | "settings";
 type Toast = { id: number; tone: "success" | "error" | "info"; message: string };
 
 interface AppProps {
@@ -62,6 +70,7 @@ const EMPTY_STATUS: AppStatus = {
 
 export default function App({ initialUiPreferences }: AppProps) {
   const [view, setView] = useState<ViewName>("download");
+  const [auroraMounted, setAuroraMounted] = useState(false);
   const [uiPreferences, setUiPreferences] = useState(initialUiPreferences);
   const [status, setStatus] = useState<AppStatus>(EMPTY_STATUS);
   const [loading, setLoading] = useState(true);
@@ -286,6 +295,7 @@ export default function App({ initialUiPreferences }: AppProps) {
     () => [
       { id: "download" as const, label: "下載片段", icon: Download },
       { id: "library" as const, label: "歌回資料庫", icon: Library },
+      { id: "aurora" as const, label: "時間軸投稿", icon: ListMusic },
       { id: "tools" as const, label: "工具管理", icon: Wrench },
       { id: "history" as const, label: "下載紀錄", icon: History },
       { id: "settings" as const, label: "介面設定", icon: Settings2 },
@@ -315,7 +325,10 @@ export default function App({ initialUiPreferences }: AppProps) {
                 key={item.id}
                 type="button"
                 className={view === item.id ? "nav-item active" : "nav-item"}
-                onClick={() => setView(item.id)}
+                onClick={() => {
+                  if (item.id === "aurora") setAuroraMounted(true);
+                  setView(item.id);
+                }}
               >
                 <Icon size={18} strokeWidth={1.8} />
                 <span>{item.label}</span>
@@ -367,10 +380,17 @@ export default function App({ initialUiPreferences }: AppProps) {
             <span className="runtime-dot" />
             {isDesktopRuntime ? "Desktop App" : "互動預覽模式"}
           </div>
-          <div className={toolsReady ? "readiness ready" : "readiness warning"}>
-            {toolsReady ? <CheckCircle2 size={16} /> : <Sparkles size={16} />}
-            <span>{loading ? "正在檢查工具…" : toolsReady ? "下載工具已就緒" : "需要安裝下載工具"}</span>
-          </div>
+          {view === "aurora" ? (
+            <div className="readiness ready">
+              <Sparkles size={16} />
+              <span>Aurora 線上時間軸</span>
+            </div>
+          ) : (
+            <div className={toolsReady ? "readiness ready" : "readiness warning"}>
+              {toolsReady ? <CheckCircle2 size={16} /> : <Sparkles size={16} />}
+              <span>{loading ? "正在檢查工具…" : toolsReady ? "下載工具已就緒" : "需要安裝下載工具"}</span>
+            </div>
+          )}
         </header>
 
         <div className="view-container">
@@ -396,6 +416,11 @@ export default function App({ initialUiPreferences }: AppProps) {
               onSync={() => syncVodLibrary(true)}
               onChoose={chooseLibraryPerformance}
             />
+          )}
+          {auroraMounted && (
+            <div className="aurora-view-mount" hidden={view !== "aurora"}>
+              <AuroraView />
+            </div>
           )}
           {view === "history" && (
             <HistoryView
