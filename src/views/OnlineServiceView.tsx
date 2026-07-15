@@ -12,22 +12,34 @@ import { openExternalUrl } from "../lib/desktop";
 
 export type OnlineServiceId = "nova" | "aurora" | "prism";
 
-export interface OnlineService {
+interface OnlineServiceBase {
   id: OnlineServiceId;
   name: string;
   navDetail: string;
+  url: string;
+  icon: LucideIcon;
+}
+
+export interface EmbeddedOnlineService extends OnlineServiceBase {
+  mode: "embedded";
   statusLabel: string;
   title: string;
   description: string;
   loadingDescription: string;
-  url: string;
   frameTitle: string;
-  icon: LucideIcon;
 }
+
+export interface ExternalOnlineService extends OnlineServiceBase {
+  mode: "external";
+  confirmationMessage: string;
+}
+
+export type OnlineService = EmbeddedOnlineService | ExternalOnlineService;
 
 export const ONLINE_SERVICES: readonly OnlineService[] = [
   {
     id: "nova",
+    mode: "embedded",
     name: "Nova",
     navDetail: "提名",
     statusLabel: "Nova VTuber 提名",
@@ -40,6 +52,7 @@ export const ONLINE_SERVICES: readonly OnlineService[] = [
   },
   {
     id: "aurora",
+    mode: "embedded",
     name: "Aurora",
     navDetail: "投稿",
     statusLabel: "Aurora VOD 投稿",
@@ -52,17 +65,19 @@ export const ONLINE_SERVICES: readonly OnlineService[] = [
   },
   {
     id: "prism",
+    mode: "external",
     name: "Prism",
-    navDetail: "播放",
-    statusLabel: "Prism 歌回播放器",
-    title: "Prism 歌回播放器",
-    description: "瀏覽 VTuber 歌回、播放歌曲並管理收藏與播放清單。",
-    loadingDescription: "載入完成後即可選擇 VTuber，開始探索與播放歌回歌曲。",
+    navDetail: "瀏覽器",
     url: "https://prism.oshi.tw/",
-    frameTitle: "Prism VTuber 歌回播放器",
+    confirmationMessage:
+      "Prism 將使用系統預設瀏覽器開啟，以確保 YouTube 影片能正常播放。是否繼續？",
     icon: PlayCircle,
   },
 ];
+
+export const EMBEDDED_ONLINE_SERVICES = ONLINE_SERVICES.filter(
+  (service): service is EmbeddedOnlineService => service.mode === "embedded",
+);
 
 export const ONLINE_SERVICE_FRAME_SANDBOX = [
   "allow-downloads",
@@ -77,7 +92,7 @@ export const ONLINE_SERVICE_FRAME_SANDBOX = [
 type FrameStatus = "loading" | "ready" | "error";
 
 interface OnlineServiceViewProps {
-  service: OnlineService;
+  service: EmbeddedOnlineService;
   notify: (message: string, tone?: "info" | "success" | "error") => void;
 }
 

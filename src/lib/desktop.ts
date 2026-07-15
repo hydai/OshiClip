@@ -28,6 +28,21 @@ const isAppUpdatePreview =
   new URLSearchParams(window.location.search).has("preview-update");
 export const canCheckForAppUpdate = isDesktopRuntime || isAppUpdatePreview;
 
+export async function confirmExternalNavigation(
+  serviceName: string,
+  message: string,
+): Promise<boolean> {
+  if (!isDesktopRuntime) return window.confirm(message);
+
+  const { confirm } = await import("@tauri-apps/plugin-dialog");
+  return confirm(message, {
+    title: `開啟 ${serviceName}`,
+    kind: "info",
+    okLabel: "開啟瀏覽器",
+    cancelLabel: "取消",
+  });
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   if (isDesktopRuntime) {
     const { openUrl } = await import("@tauri-apps/plugin-opener");

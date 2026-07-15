@@ -2,21 +2,22 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  EMBEDDED_ONLINE_SERVICES,
   ONLINE_SERVICE_FRAME_SANDBOX,
   ONLINE_SERVICES,
   OnlineServiceView,
 } from "./OnlineServiceView";
 
 const EXPECTED_SERVICES = [
-  ["nova", "https://nova.oshi.tw/"],
-  ["aurora", "https://aurora.oshi.tw/"],
-  ["prism", "https://prism.oshi.tw/"],
+  ["nova", "https://nova.oshi.tw/", "embedded"],
+  ["aurora", "https://aurora.oshi.tw/", "embedded"],
+  ["prism", "https://prism.oshi.tw/", "external"],
 ];
 const notify = () => undefined;
 
 describe("OnlineServiceView", () => {
   it("registers only the canonical HTTPS service origins", () => {
-    expect(ONLINE_SERVICES.map(({ id, url }) => [id, url])).toEqual(
+    expect(ONLINE_SERVICES.map(({ id, url, mode }) => [id, url, mode])).toEqual(
       EXPECTED_SERVICES,
     );
 
@@ -25,6 +26,17 @@ describe("OnlineServiceView", () => {
       expect(url.protocol).toBe("https:");
       expect(url.pathname).toBe("/");
     }
+  });
+
+  it("keeps Prism external while Nova and Aurora remain embedded", () => {
+    expect(EMBEDDED_ONLINE_SERVICES.map(({ id }) => id)).toEqual([
+      "nova",
+      "aurora",
+    ]);
+    expect(ONLINE_SERVICES.find(({ id }) => id === "prism")).toMatchObject({
+      mode: "external",
+      confirmationMessage: expect.stringContaining("系統預設瀏覽器"),
+    });
   });
 
   it("allows submission and playback features without parent navigation", () => {
@@ -40,7 +52,7 @@ describe("OnlineServiceView", () => {
     expect(ONLINE_SERVICE_FRAME_SANDBOX).not.toContain("allow-top-navigation");
   });
 
-  it.each(ONLINE_SERVICES)("renders the trusted $name frame and fallback", (service) => {
+  it.each(EMBEDDED_ONLINE_SERVICES)("renders the trusted $name frame and fallback", (service) => {
     const markup = renderToStaticMarkup(
       <OnlineServiceView service={service} notify={notify} />,
     );
@@ -71,9 +83,10 @@ describe("OnlineServiceView", () => {
       identifier: "opener:allow-open-url",
       allow: EXPECTED_SERVICES.map(([, url]) => ({ url })),
     });
+    expect(capability.permissions).toContain("dialog:allow-message");
   });
 
-  it("keeps the desktop CSP restricted to the three service origins", () => {
+  it("keeps the desktop CSP restricted to embedded service origins", () => {
     const config = JSON.parse(
       readFileSync(
         new URL("../../src-tauri/tauri.conf.json", import.meta.url),
@@ -89,7 +102,6 @@ describe("OnlineServiceView", () => {
     expect(frameSources).toEqual([
       "https://nova.oshi.tw",
       "https://aurora.oshi.tw",
-      "https://prism.oshi.tw",
     ]);
     expect(config.app.windows).toEqual(
       expect.arrayContaining([

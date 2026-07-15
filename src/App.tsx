@@ -15,10 +15,12 @@ import { UpdateDialog } from "./components/UpdateDialog";
 import { DownloadView } from "./views/DownloadView";
 import { HistoryView } from "./views/HistoryView";
 import {
+  EMBEDDED_ONLINE_SERVICES,
   ONLINE_SERVICES,
   OnlineServiceView,
   type OnlineServiceId,
 } from "./views/OnlineServiceView";
+import { launchExternalService } from "./lib/externalService";
 import { SettingsView } from "./views/SettingsView";
 import { ToolsView } from "./views/ToolsView";
 import { VodLibraryView } from "./views/VodLibraryView";
@@ -103,6 +105,9 @@ export default function App({ initialUiPreferences }: AppProps) {
   const vodLibraryLoadStarted = useRef(false);
   const vodLibrarySyncInFlight = useRef(false);
   const vodLibraryDatasetRef = useRef<VodLibraryDataset | null>(null);
+  const externalServiceLaunchInFlight = useRef(false);
+  const [launchingExternalServiceId, setLaunchingExternalServiceId] =
+    useState<OnlineServiceId | null>(null);
 
   const notify = useCallback((message: string, tone: Toast["tone"] = "info") => {
     const id = Date.now() + Math.random();
@@ -304,9 +309,24 @@ export default function App({ initialUiPreferences }: AppProps) {
     }
   }, [notify]);
 
-  const selectView = useCallback((nextView: ViewName) => {
+  const selectView = useCallback(async (nextView: ViewName) => {
     const service = ONLINE_SERVICES.find(({ id }) => id === nextView);
-    if (service) {
+    if (service?.mode === "external") {
+      if (externalServiceLaunchInFlight.current) return;
+      externalServiceLaunchInFlight.current = true;
+      setLaunchingExternalServiceId(service.id);
+      try {
+        await launchExternalService(service);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        notify(`無法開啟 ${service.name}：${detail}`, "error");
+      } finally {
+        externalServiceLaunchInFlight.current = false;
+        setLaunchingExternalServiceId(null);
+      }
+      return;
+    }
+    if (service?.mode === "embedded") {
       setMountedOnlineServices((current) => {
         if (current.has(service.id)) return current;
         const next = new Set(current);
@@ -315,7 +335,7 @@ export default function App({ initialUiPreferences }: AppProps) {
       });
     }
     setView(nextView);
-  }, []);
+  }, [notify]);
 
   const navSections = useMemo<NavSection[]>(
     () => [
@@ -343,7 +363,9 @@ export default function App({ initialUiPreferences }: AppProps) {
     ],
     [],
   );
-  const activeOnlineService = ONLINE_SERVICES.find(({ id }) => id === view);
+  const activeOnlineService = EMBEDDED_ONLINE_SERVICES.find(
+    ({ id }) => id === view,
+  );
 
   return (
     <div className="app-shell">
@@ -376,7 +398,9 @@ export default function App({ initialUiPreferences }: AppProps) {
                       key={item.id}
                       type="button"
                       className={view === item.id ? "nav-item active" : "nav-item"}
-                      onClick={() => selectView(item.id)}
+                      disabled={launchingExternalServiceId === item.id}
+                      aria-busy={launchingExternalServiceId === item.id}
+                      onClick={() => void selectView(item.id)}
                     >
                       <Icon size={18} strokeWidth={1.8} />
                       <span>{item.label}</span>
@@ -469,7 +493,7 @@ export default function App({ initialUiPreferences }: AppProps) {
               onChoose={chooseLibraryPerformance}
             />
           )}
-          {ONLINE_SERVICES.map(
+          {EMBEDDED_ONLINE_SERVICES.map(
             (service) =>
               mountedOnlineServices.has(service.id) && (
                 <div
