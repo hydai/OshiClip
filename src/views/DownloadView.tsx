@@ -80,6 +80,23 @@ const PREVIEW_PREFILL: DownloadPrefill = {
   },
 };
 
+const FORMAT_PRESET_OPTIONS: ReadonlyArray<{
+  value: FormatPreset;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "avc1_mp4a",
+    label: "相容 MP4",
+    description: "avc1 + mp4a，適合大多數播放器",
+  },
+  {
+    value: "best",
+    label: "最佳品質",
+    description: "由 yt-dlp 選擇最高品質來源",
+  },
+];
+
 export function DownloadView({
   status,
   prefill,
@@ -281,6 +298,9 @@ export function DownloadView({
       !status.tools.deno.requiresRepair,
   );
   const windowsYtdlpNeedsRepair = status.tools["yt-dlp"].requiresRepair;
+  const selectedFormatPreset =
+    FORMAT_PRESET_OPTIONS.find((option) => option.value === formatPreset) ??
+    FORMAT_PRESET_OPTIONS[0];
 
   const formError = useMemo(() => {
     if (!url.trim()) return null;
@@ -585,37 +605,31 @@ export function DownloadView({
             </div>
           )}
 
-          <div
-            className="format-picker"
-            role="radiogroup"
-            aria-labelledby="format-picker-label"
-          >
-            <div className="format-picker-label" id="format-picker-label">
+          <div className="format-picker">
+            <label className="format-picker-label" htmlFor="format-preset">
               <Gauge size={16} /> 影片規格
-            </div>
-            <div className="preset-options">
-              <label className={formatPreset === "avc1_mp4a" ? "preset selected" : "preset"}>
-                <input
-                  type="radio"
-                  name="preset"
-                  value="avc1_mp4a"
-                  checked={formatPreset === "avc1_mp4a"}
-                  onChange={() => setFormatPreset("avc1_mp4a")}
-                />
-                <span><strong>相容 MP4</strong><small>avc1 + mp4a，適合大多數播放器</small></span>
-                <Check size={15} />
-              </label>
-              <label className={formatPreset === "best" ? "preset selected" : "preset"}>
-                <input
-                  type="radio"
-                  name="preset"
-                  value="best"
-                  checked={formatPreset === "best"}
-                  onChange={() => setFormatPreset("best")}
-                />
-                <span><strong>最佳品質</strong><small>由 yt-dlp 選擇最高品質來源</small></span>
-                <Check size={15} />
-              </label>
+            </label>
+            <div className="format-select-control">
+              <div className="format-select-input">
+                <select
+                  id="format-preset"
+                  value={formatPreset}
+                  aria-describedby="format-preset-description"
+                  onChange={(event) =>
+                    setFormatPreset(event.currentTarget.value as FormatPreset)
+                  }
+                >
+                  {FORMAT_PRESET_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={16} aria-hidden="true" />
+              </div>
+              <small id="format-preset-description">
+                {selectedFormatPreset.description}
+              </small>
             </div>
           </div>
 
