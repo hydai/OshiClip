@@ -954,28 +954,36 @@ summary:focus-visible {
 .filename-template-preview.invalid > strong { color: #a5474c; }
 .filename-template-panel > small { color: #969aa4; font-size: var(--font-caption); }
 
-.advanced-toggle {
+.format-picker {
   grid-column: 1 / -1;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
   padding: 9px 1px;
   color: #6c7180;
   border: 0;
   border-top: 1px solid #eeeeec;
   border-bottom: 1px solid #eeeeec;
-  background: none;
-  cursor: pointer;
 }
 
-.advanced-toggle > span { display: flex; align-items: center; gap: 6px; font-size: var(--font-label); font-weight: 700; }
-.advanced-toggle > span:last-child { color: #999da7; font-weight: 600; }
+.format-picker-label {
+  display: flex;
+  grid-column: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: max-content;
+  font-size: var(--font-label);
+  font-weight: 700;
+}
 
 .preset-options {
-  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+  min-width: 0;
 }
 
 .preset {
@@ -1213,8 +1221,10 @@ summary:focus-visible {
 .tool-title-row h3 { margin: 1px 0 3px; color: #202533; font-size: var(--font-heading); letter-spacing: -0.03em; }
 .tool-title-row p { margin: 0; color: #969aa4; font-size: var(--font-caption); }
 .installed-badge,
-.missing-badge { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; padding: 5px 7px; color: #338266; font-size: var(--font-caption); font-weight: 750; border-radius: 999px; background: #eaf8f2; }
+.missing-badge,
+.repair-badge { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; padding: 5px 7px; color: #338266; font-size: var(--font-caption); font-weight: 750; border-radius: 999px; background: #eaf8f2; }
 .missing-badge { color: #a66b2c; background: #fff4e5; }
+.repair-badge { color: #a74e54; background: #fff0f0; }
 
 .tool-current { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 2px 8px; margin: 16px 0 13px; padding: 10px; border-radius: 10px; background: #f6f6f3; }
 .tool-current span { color: #92969f; font-size: var(--font-caption); }
@@ -2261,7 +2271,7 @@ html[data-theme="dark"] :is(
   .card-heading small,
   .field > span,
   .duration-badge,
-  .advanced-toggle,
+  .format-picker,
   .preset small,
   .form-footnote,
   .tool-title-row p,
@@ -2325,7 +2335,7 @@ html[data-theme="dark"] .filename-template-preview.invalid { background: #38242a
 html[data-theme="dark"] .filename-template-preview.invalid > strong { color: #ff9da1; }
 html[data-theme="dark"] .timeline-track { background: #343c4a; }
 html[data-theme="dark"] .time-connector span { border-color: #4b5566; }
-html[data-theme="dark"] .advanced-toggle,
+html[data-theme="dark"] .format-picker,
 html[data-theme="dark"] .version-list { border-color: #313a49; }
 html[data-theme="dark"] .preset { border-color: #384253; }
 html[data-theme="dark"] .preset > svg { color: #b5b7ff; }
@@ -2368,6 +2378,7 @@ html[data-theme="dark"] .tool-mark.violet { color: #c4c5ff; background: #303158;
 html[data-theme="dark"] .tool-mark.mint { color: #91ddc0; background: #1f4036; }
 html[data-theme="dark"] .installed-badge { color: #83d3b4; background: #19342d; }
 html[data-theme="dark"] .missing-badge { color: #e7b47a; background: #3b2c1f; }
+html[data-theme="dark"] .repair-badge { color: #ff9da1; background: #38242a; }
 html[data-theme="dark"] .up-to-date { color: #83d3b4; }
 html[data-theme="dark"] .progress-bar.slim { background: #333c4a; }
 html[data-theme="dark"] .version-row { border-color: #343e4e; }
@@ -2648,6 +2659,7 @@ html[data-theme="dark"] .update-error { color: #ffadb1; border-color: #67434a; b
 }
 
 @media (max-width: 850px) {
+  .format-picker { grid-template-columns: 1fr; gap: 7px; }
   .theme-options { grid-template-columns: 1fr; }
   .font-size-options { grid-template-columns: repeat(3, minmax(92px, 1fr)); }
   .library-toolbar { grid-template-columns: 1fr; }

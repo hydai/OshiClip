@@ -72,9 +72,9 @@ interface AppProps {
 
 const EMPTY_STATUS: AppStatus = {
   tools: {
-    "yt-dlp": { selected: null, installed: [] },
-    ffmpeg: { selected: null, installed: [] },
-    deno: { selected: null, installed: [] },
+    "yt-dlp": { selected: null, installed: [], requiresRepair: false },
+    ffmpeg: { selected: null, installed: [], requiresRepair: false },
+    deno: { selected: null, installed: [], requiresRepair: false },
   },
   settings: { outputDirectory: "" },
   activeJobId: null,
@@ -273,7 +273,12 @@ export default function App({ initialUiPreferences }: AppProps) {
   }, [notify]);
 
   const toolsReady = Boolean(
-    status.tools["yt-dlp"].selected && status.tools.ffmpeg.selected && status.tools.deno.selected,
+    status.tools["yt-dlp"].selected &&
+      !status.tools["yt-dlp"].requiresRepair &&
+      status.tools.ffmpeg.selected &&
+      !status.tools.ffmpeg.requiresRepair &&
+      status.tools.deno.selected &&
+      !status.tools.deno.requiresRepair,
   );
 
   const dismissAppUpdate = useCallback(() => {
@@ -464,7 +469,15 @@ export default function App({ initialUiPreferences }: AppProps) {
           ) : (
             <div className={toolsReady ? "readiness ready" : "readiness warning"}>
               {toolsReady ? <CheckCircle2 size={16} /> : <Sparkles size={16} />}
-              <span>{loading ? "正在檢查工具…" : toolsReady ? "下載工具已就緒" : "需要安裝下載工具"}</span>
+              <span>
+                {loading
+                  ? "正在檢查工具…"
+                  : toolsReady
+                    ? "下載工具已就緒"
+                    : status.tools["yt-dlp"].requiresRepair
+                      ? "Windows 下載元件需要修復"
+                      : "需要安裝下載工具"}
+              </span>
             </div>
           )}
         </header>

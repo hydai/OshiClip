@@ -1,7 +1,9 @@
 use crate::{
     error::{AppError, AppResult},
     manifest::{relative_binary_path, ManifestStore},
-    models::{ApiInstalledVersion, AvailableRelease, InstalledVersion, Tool},
+    models::{
+        ApiInstalledVersion, AvailableRelease, InstalledVersion, Tool, WINDOWS_YTDLP_PACKAGE_ASSET,
+    },
     AppState,
 };
 use chrono::Utc;
@@ -11,11 +13,18 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(not(target_os = "macos"))]
 use std::collections::BTreeSet;
-use std::{fs, io, path::Path, time::Duration};
+use std::{
+    fs,
+    io::{self, Read},
+    path::Path,
+    time::Duration,
+};
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::AsyncWriteExt;
 
 const MAX_DOWNLOAD_BYTES: u64 = 1_000_000_000;
+const MAX_ARCHIVE_ENTRIES: usize = 4_096;
+const MAX_EXTRACTED_BYTES: u64 = 1_000_000_000;
 
 #[derive(Debug, Deserialize)]
 struct GithubRelease {
@@ -85,17 +94,22 @@ pub async fn install_tool(
 
     let store = ManifestStore::new(state.app_data.clone());
     let mut manifest = store.read()?;
-    if let Some(existing) = manifest
+    let existing = manifest
         .tools
         .get(tool)
         .installed
         .iter()
         .find(|installed| installed.version == release.version)
-        .cloned()
-    {
+        .cloned();
+    if let Some(existing) = existing.as_ref().filter(|installed| {
+        installed_matches_release(installed, &release)
+            && store
+                .resolve_relative(&installed.path)
+                .is_ok_and(|binary| installation_layout_is_usable(&binary, tool, cfg!(windows)))
+    }) {
         manifest.tools.get_mut(tool).selected = Some(release.version.clone());
         store.write(&manifest)?;
-        return Ok(ApiInstalledVersion::from(&existing));
+        return Ok(ApiInstalledVersion::from(existing));
     }
 
     emit_progress(&app, tool, &release.version, 0, "downloading");
@@ -127,31 +141,9 @@ pub async fn install_tool(
         ));
     }
 
-    let prepared_binary = if release.archive {
-        emit_progress(&app, tool, &release.version, 92, "extracting");
-        let archive = asset_path.clone();
-        let extracted = temporary.path().join(tool.binary_name());
-        let extracted_for_task = extracted.clone();
-        tokio::task::spawn_blocking(move || extract_binary(&archive, &extracted_for_task, tool))
-            .await
-            .map_err(|error| AppError::Message(format!("解壓縮工作失敗：{error}")))??;
-        extracted
-    } else {
-        asset_path
-    };
-
-    emit_progress(&app, tool, &release.version, 96, "installing");
-    set_executable(&prepared_binary)?;
-
     let tool_root = state.app_data.join("bin").join(tool.as_str());
     fs::create_dir_all(&tool_root)?;
     let final_directory = tool_root.join(&release.version);
-    if final_directory.exists() {
-        return Err(AppError::Message(format!(
-            "安裝目錄已存在，請先移除或修復 {tool} {}",
-            release.version
-        )));
-    }
     let staging_directory = tool_root.join(format!(
         ".install-{}-{}",
         release.version,
@@ -159,11 +151,56 @@ pub async fn install_tool(
     ));
     fs::create_dir(&staging_directory)?;
     let staged_binary = staging_directory.join(tool.binary_name());
-    if let Err(error) = move_or_copy(&prepared_binary, &staged_binary) {
+
+    let prepare_result = if is_windows_ytdlp_package(tool, &release.asset_name) {
+        emit_progress(&app, tool, &release.version, 92, "extracting");
+        let archive = asset_path.clone();
+        let destination = staging_directory.clone();
+        tokio::task::spawn_blocking(move || extract_windows_ytdlp_package(&archive, &destination))
+            .await
+            .map_err(|error| AppError::Message(format!("解壓縮工作失敗：{error}")))?
+    } else {
+        let prepared_binary = if release.archive {
+            emit_progress(&app, tool, &release.version, 92, "extracting");
+            let archive = asset_path.clone();
+            let extracted = temporary.path().join(tool.binary_name());
+            let extracted_for_task = extracted.clone();
+            tokio::task::spawn_blocking(move || {
+                extract_binary(&archive, &extracted_for_task, tool)
+            })
+            .await
+            .map_err(|error| AppError::Message(format!("解壓縮工作失敗：{error}")))??;
+            extracted
+        } else {
+            asset_path
+        };
+        move_or_copy(&prepared_binary, &staged_binary)
+    };
+    if let Err(error) = prepare_result {
         let _ = fs::remove_dir_all(&staging_directory);
         return Err(error);
     }
-    fs::rename(&staging_directory, &final_directory)?;
+    if let Err(error) = set_executable(&staged_binary) {
+        let _ = fs::remove_dir_all(&staging_directory);
+        return Err(error);
+    }
+
+    emit_progress(&app, tool, &release.version, 96, "installing");
+    let backup_directory = tool_root.join(format!(
+        ".backup-{}-{}",
+        release.version,
+        Utc::now().timestamp_millis()
+    ));
+    if final_directory.exists() {
+        fs::rename(&final_directory, &backup_directory)?;
+    }
+    if let Err(error) = fs::rename(&staging_directory, &final_directory) {
+        if backup_directory.exists() {
+            let _ = fs::rename(&backup_directory, &final_directory);
+        }
+        let _ = fs::remove_dir_all(&staging_directory);
+        return Err(error.into());
+    }
     sync_directory(&tool_root);
 
     let final_binary = final_directory.join(tool.binary_name());
@@ -172,22 +209,39 @@ pub async fn install_tool(
         path: relative_binary_path(tool, &release.version),
         sha256: actual_hash,
         source_url: release.asset_url,
-        size_bytes: fs::metadata(&final_binary)
-            .map(|metadata| metadata.len())
-            .unwrap_or(downloaded_size),
+        size_bytes: directory_size(&final_directory).unwrap_or_else(|| {
+            fs::metadata(&final_binary)
+                .map(|metadata| metadata.len())
+                .unwrap_or(downloaded_size)
+        }),
         installed_at: Utc::now().to_rfc3339(),
     };
 
     let tool_state = manifest.tools.get_mut(tool);
-    tool_state.installed.push(installed.clone());
+    if let Some(index) = tool_state
+        .installed
+        .iter()
+        .position(|version| version.version == installed.version)
+    {
+        tool_state.installed[index] = installed.clone();
+    } else {
+        tool_state.installed.push(installed.clone());
+    }
     tool_state
         .installed
         .sort_by(|left, right| right.version.cmp(&left.version));
     tool_state.selected = Some(installed.version.clone());
     if let Err(error) = store.write(&manifest) {
         let _ = fs::remove_dir_all(&final_directory);
+        if backup_directory.exists() {
+            let _ = fs::rename(&backup_directory, &final_directory);
+        }
         return Err(error);
     }
+    if backup_directory.exists() {
+        let _ = fs::remove_dir_all(&backup_directory);
+    }
+    sync_directory(&tool_root);
 
     emit_progress(&app, tool, &installed.version, 100, "installing");
     Ok(ApiInstalledVersion::from(&installed))
@@ -304,7 +358,7 @@ async fn fetch_ytdlp_releases(client: &Client) -> AppResult<Vec<AvailableRelease
             asset_url: asset.browser_download_url.clone(),
             checksum_url: checksum.browser_download_url.clone(),
             expected_sha256: github_asset_sha256(asset),
-            archive: false,
+            archive: cfg!(windows),
         });
     }
     Ok(available)
@@ -591,6 +645,71 @@ fn extract_binary(archive_path: &Path, destination: &Path, tool: Tool) -> AppRes
     )))
 }
 
+fn extract_windows_ytdlp_package(archive_path: &Path, destination: &Path) -> AppResult<()> {
+    let archive_file = fs::File::open(archive_path)?;
+    let mut archive = zip::ZipArchive::new(archive_file)?;
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(AppError::Message(
+            "yt-dlp 壓縮包包含過多檔案，已停止安裝".into(),
+        ));
+    }
+
+    let mut extracted_bytes = 0_u64;
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index)?;
+        let path = entry
+            .enclosed_name()
+            .ok_or_else(|| AppError::Message("yt-dlp 壓縮包包含不安全的路徑".into()))?;
+        let allowed = path == Path::new("yt-dlp.exe") || path.starts_with("_internal");
+        if !allowed {
+            return Err(AppError::Message(format!(
+                "yt-dlp 壓縮包包含非預期檔案：{}",
+                path.display()
+            )));
+        }
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err(AppError::Message(
+                "yt-dlp 壓縮包包含不允許的符號連結".into(),
+            ));
+        }
+
+        let output_path = destination.join(&path);
+        if entry.is_dir() {
+            fs::create_dir_all(&output_path)?;
+            continue;
+        }
+        if !entry.is_file() {
+            return Err(AppError::Message("yt-dlp 壓縮包包含不支援的項目".into()));
+        }
+
+        let remaining = MAX_EXTRACTED_BYTES.saturating_sub(extracted_bytes);
+        let Some(parent) = output_path.parent() else {
+            return Err(AppError::Message("yt-dlp 解壓縮路徑無效".into()));
+        };
+        fs::create_dir_all(parent)?;
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&output_path)?;
+        let copied = io::copy(&mut entry.take(remaining.saturating_add(1)), &mut output)?;
+        if copied > remaining {
+            return Err(AppError::Message("yt-dlp 解壓縮後大小超出安全上限".into()));
+        }
+        extracted_bytes = extracted_bytes.saturating_add(copied);
+        output.sync_all()?;
+    }
+
+    if !destination.join("yt-dlp.exe").is_file() || !destination.join("_internal").is_dir() {
+        return Err(AppError::Message(
+            "yt-dlp Windows 套件缺少必要的執行元件".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(any(target_os = "linux", test))]
 fn extract_tar_xz_binary(archive_path: &Path, destination: &Path, tool: Tool) -> AppResult<()> {
     let archive_file = io::BufReader::new(fs::File::open(archive_path)?);
@@ -623,6 +742,37 @@ fn move_or_copy(source: &Path, destination: &Path) -> AppResult<()> {
             Ok(())
         }
     }
+}
+
+fn installed_matches_release(installed: &InstalledVersion, release: &AvailableRelease) -> bool {
+    installed.version == release.version && installed.source_url == release.asset_url
+}
+
+fn is_windows_ytdlp_package(tool: Tool, asset_name: &str) -> bool {
+    tool == Tool::YtDlp && asset_name == WINDOWS_YTDLP_PACKAGE_ASSET
+}
+
+pub(crate) fn installation_layout_is_usable(binary: &Path, tool: Tool, is_windows: bool) -> bool {
+    binary.is_file()
+        && (!is_windows
+            || tool != Tool::YtDlp
+            || binary
+                .parent()
+                .is_some_and(|directory| directory.join("_internal").is_dir()))
+}
+
+fn directory_size(path: &Path) -> Option<u64> {
+    let mut total = 0_u64;
+    for entry in fs::read_dir(path).ok()? {
+        let entry = entry.ok()?;
+        let file_type = entry.file_type().ok()?;
+        if file_type.is_dir() {
+            total = total.saturating_add(directory_size(&entry.path())?);
+        } else if file_type.is_file() {
+            total = total.saturating_add(entry.metadata().ok()?.len());
+        }
+    }
+    Some(total)
 }
 
 #[cfg(unix)]
@@ -702,7 +852,7 @@ fn ytdlp_asset_name() -> &'static str {
 
 #[cfg(windows)]
 fn ytdlp_asset_name() -> &'static str {
-    "yt-dlp.exe"
+    WINDOWS_YTDLP_PACKAGE_ASSET
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -755,6 +905,18 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).expect("create zip archive");
+        let mut archive = zip::ZipWriter::new(file);
+        for (name, contents) in entries {
+            archive
+                .start_file(*name, zip::write::SimpleFileOptions::default())
+                .expect("start zip entry");
+            archive.write_all(contents).expect("write zip entry");
+        }
+        archive.finish().expect("finish zip archive");
+    }
+
     #[test]
     fn extracts_tar_xz_with_the_pure_rust_decoder() {
         let temporary = tempfile::tempdir().expect("create temporary directory");
@@ -791,6 +953,81 @@ mod tests {
             fs::read(destination).expect("read extracted binary"),
             payload
         );
+    }
+
+    #[test]
+    fn extracts_the_complete_windows_ytdlp_package() {
+        let temporary = tempfile::tempdir().expect("create temporary directory");
+        let archive_path = temporary.path().join("yt-dlp_win.zip");
+        let destination = temporary.path().join("package");
+        write_zip(
+            &archive_path,
+            &[
+                ("yt-dlp.exe", b"launcher"),
+                ("_internal/python313.dll", b"python runtime"),
+                ("_internal/yt_dlp/__init__.pyc", b"yt-dlp module"),
+            ],
+        );
+
+        extract_windows_ytdlp_package(&archive_path, &destination)
+            .expect("extract Windows yt-dlp package");
+
+        assert_eq!(
+            fs::read(destination.join("yt-dlp.exe")).unwrap(),
+            b"launcher"
+        );
+        assert_eq!(
+            fs::read(destination.join("_internal/python313.dll")).unwrap(),
+            b"python runtime"
+        );
+        assert!(destination.join("_internal/yt_dlp/__init__.pyc").is_file());
+    }
+
+    #[test]
+    fn rejects_path_traversal_in_windows_ytdlp_package() {
+        let temporary = tempfile::tempdir().expect("create temporary directory");
+        let archive_path = temporary.path().join("yt-dlp_win.zip");
+        let destination = temporary.path().join("package");
+        write_zip(
+            &archive_path,
+            &[("yt-dlp.exe", b"launcher"), ("../escape.dll", b"escape")],
+        );
+
+        assert!(extract_windows_ytdlp_package(&archive_path, &destination).is_err());
+        assert!(!temporary.path().join("escape.dll").exists());
+    }
+
+    #[test]
+    fn reinstalls_a_same_version_release_when_its_package_changed() {
+        let release = AvailableRelease {
+            tool: Tool::YtDlp,
+            version: "2026.07.04".into(),
+            asset_name: WINDOWS_YTDLP_PACKAGE_ASSET.into(),
+            size_bytes: 1,
+            published_at: None,
+            asset_url: format!(
+                "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/{WINDOWS_YTDLP_PACKAGE_ASSET}"
+            ),
+            checksum_url: String::new(),
+            expected_sha256: Some("0".repeat(64)),
+            archive: true,
+        };
+        let legacy = InstalledVersion {
+            version: release.version.clone(),
+            path: "bin/yt-dlp/2026.07.04/yt-dlp.exe".into(),
+            sha256: "preview".into(),
+            source_url: "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp.exe"
+                .into(),
+            size_bytes: 1,
+            installed_at: "2026-07-04T00:00:00Z".into(),
+        };
+        let repaired = InstalledVersion {
+            source_url: release.asset_url.clone(),
+            ..legacy.clone()
+        };
+
+        assert!(!installed_matches_release(&legacy, &release));
+        assert!(installed_matches_release(&repaired, &release));
     }
 
     #[test]

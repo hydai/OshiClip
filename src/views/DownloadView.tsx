@@ -107,7 +107,6 @@ export function DownloadView({
   const [formatPreset, setFormatPreset] = useState<FormatPreset>(
     status.activeDownload?.formatPreset ?? "avc1_mp4a",
   );
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [outputTouched, setOutputTouched] = useState(
     Boolean(initial?.outputName || initialFilenameMetadata),
   );
@@ -274,8 +273,14 @@ export function DownloadView({
   const actualOutputName = resolvedFilename.outputName;
   const literalContainsTagSyntax = !filenameMetadata && /[<>]/.test(outputName);
   const toolsReady = Boolean(
-    status.tools["yt-dlp"].selected && status.tools.ffmpeg.selected && status.tools.deno.selected,
+    status.tools["yt-dlp"].selected &&
+      !status.tools["yt-dlp"].requiresRepair &&
+      status.tools.ffmpeg.selected &&
+      !status.tools.ffmpeg.requiresRepair &&
+      status.tools.deno.selected &&
+      !status.tools.deno.requiresRepair,
   );
+  const windowsYtdlpNeedsRepair = status.tools["yt-dlp"].requiresRepair;
 
   const formError = useMemo(() => {
     if (!url.trim()) return null;
@@ -435,11 +440,15 @@ export function DownloadView({
         <div className="setup-banner">
           <div className="setup-icon"><WandSparkles size={21} /></div>
           <div>
-            <strong>第一次使用，先準備下載工具</strong>
-            <span>安裝由應用程式管理的 yt-dlp、ffmpeg 與 Deno，全程不需要終端機。</span>
+            <strong>{windowsYtdlpNeedsRepair ? "修復 Windows 下載元件" : "第一次使用，先準備下載工具"}</strong>
+            <span>
+              {windowsYtdlpNeedsRepair
+                ? "目前的單檔版 yt-dlp 可能無法啟動；修復後會換成官方完整套件。"
+                : "安裝由應用程式管理的 yt-dlp、ffmpeg 與 Deno，全程不需要終端機。"}
+            </span>
           </div>
           <button type="button" className="button light" onClick={onOpenTools}>
-            開始設定 <ArrowRight size={16} />
+            {windowsYtdlpNeedsRepair ? "前往修復" : "開始設定"} <ArrowRight size={16} />
           </button>
         </div>
       )}
@@ -576,17 +585,14 @@ export function DownloadView({
             </div>
           )}
 
-          <button
-            type="button"
-            className="advanced-toggle"
-            onClick={() => setAdvancedOpen((open) => !open)}
-            aria-expanded={advancedOpen}
+          <div
+            className="format-picker"
+            role="radiogroup"
+            aria-labelledby="format-picker-label"
           >
-            <span><Gauge size={16} /> 進階格式</span>
-            <span>{formatPreset === "avc1_mp4a" ? "相容 MP4" : "最佳品質"} {advancedOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</span>
-          </button>
-
-          {advancedOpen && (
+            <div className="format-picker-label" id="format-picker-label">
+              <Gauge size={16} /> 影片規格
+            </div>
             <div className="preset-options">
               <label className={formatPreset === "avc1_mp4a" ? "preset selected" : "preset"}>
                 <input
@@ -611,7 +617,7 @@ export function DownloadView({
                 <Check size={15} />
               </label>
             </div>
-          )}
+          </div>
 
           {formError && url.trim() && (
             <div className="inline-error"><AlertCircle size={15} /> {formError}</div>

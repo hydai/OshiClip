@@ -13,6 +13,7 @@ export interface InstalledVersion {
 export interface ToolState {
   selected: string | null;
   installed: InstalledVersion[];
+  requiresRepair: boolean;
 }
 
 export interface AppSettings {

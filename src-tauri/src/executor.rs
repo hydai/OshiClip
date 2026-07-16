@@ -1,4 +1,5 @@
 use crate::{
+    binary_manager::installation_layout_is_usable,
     command_builder::build_download_args,
     error::{AppError, AppResult},
     history::record_completed_download,
@@ -19,6 +20,8 @@ use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const WAITING_AFTER: Duration = Duration::from_secs(30);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
+const STALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,7 +56,18 @@ pub fn get_app_status(state: State<'_, AppState>) -> AppResult<AppStatus> {
         .map_err(|_| AppError::Message("下載狀態鎖定失敗".into()))?
         .as_ref()
         .map(|download| download.status.clone());
-    Ok(AppStatus::from_manifest(&manifest, active_download))
+    let mut status = AppStatus::from_manifest(&manifest, active_download);
+    if cfg!(windows) && manifest.tools.get(Tool::YtDlp).selected.is_some() {
+        let layout_is_usable = store
+            .selected_path(&manifest, Tool::YtDlp)
+            .is_ok_and(|path| installation_layout_is_usable(&path, Tool::YtDlp, true));
+        if !layout_is_usable {
+            if let Some(tool) = status.tools.get_mut(Tool::YtDlp.as_str()) {
+                tool.requires_repair = true;
+            }
+        }
+    }
+    Ok(status)
 }
 
 #[tauri::command]
@@ -92,6 +106,7 @@ pub async fn start_download(
     let store = ManifestStore::new(state.app_data.clone());
     let manifest = store.read()?;
     let ytdlp = store.selected_path(&manifest, Tool::YtDlp)?;
+    ensure_ytdlp_runtime_layout(&ytdlp, cfg!(windows))?;
     let ffmpeg = store.selected_path(&manifest, Tool::Ffmpeg)?;
     let deno = store.selected_path(&manifest, Tool::Deno)?;
     let ffmpeg_directory = ffmpeg
@@ -316,6 +331,15 @@ async fn monitor_download(
                         }
                         break;
                     }
+                    CommandEvent::Error(error) => {
+                        let message = format!(
+                            "無法讀取 yt-dlp 的執行結果：{error}。請前往工具管理修復 yt-dlp 後再試。"
+                        );
+                        emit_log(&app, &job_id, &format!("[OshiClip] {message}"), "stderr");
+                        fail_active_download(&app, &job_id, &message);
+                        saw_termination = true;
+                        break;
+                    }
                     _ => {}
                 }
             }
@@ -331,6 +355,16 @@ async fn monitor_download(
                     if base_phase != DownloadPhase::Finalizing {
                         base_phase = DownloadPhase::Downloading;
                     }
+                }
+
+                if let Some(message) = inactivity_timeout_message(
+                    base_phase,
+                    now.duration_since(last_activity),
+                ) {
+                    emit_log(&app, &job_id, &format!("[OshiClip] {message}"), "stderr");
+                    fail_active_download(&app, &job_id, message);
+                    saw_termination = true;
+                    break;
                 }
 
                 let waiting = base_phase != DownloadPhase::Finalizing
@@ -358,7 +392,7 @@ async fn monitor_download(
                     emit_log(
                         &app,
                         &job_id,
-                        "[OshiClip] 已有 30 秒沒有收到新資料；下載工具仍在執行，可繼續等待或取消任務。",
+                        "[OshiClip] 已有 30 秒沒有收到新資料；若仍無回應，OshiClip 會自動停止並顯示處理方式。",
                         "stderr",
                     );
                     waiting_reported = true;
@@ -533,6 +567,32 @@ fn partial_output_size(expected_output: &str) -> u64 {
         .unwrap_or(0)
 }
 
+fn inactivity_timeout_message(
+    phase: DownloadPhase,
+    inactive_for: Duration,
+) -> Option<&'static str> {
+    match phase {
+        DownloadPhase::Preparing if inactive_for >= STARTUP_TIMEOUT => Some(
+            "yt-dlp 啟動後 90 秒仍未回應，已停止任務。請前往「工具管理」修復 yt-dlp，再重新下載。",
+        ),
+        DownloadPhase::Downloading if inactive_for >= STALL_TIMEOUT => {
+            Some("下載工具已連續 5 分鐘沒有進度，已停止任務。請檢查網路後重新下載。")
+        }
+        _ => None,
+    }
+}
+
+fn ensure_ytdlp_runtime_layout(path: &std::path::Path, is_windows: bool) -> AppResult<()> {
+    if installation_layout_is_usable(path, Tool::YtDlp, is_windows) {
+        Ok(())
+    } else {
+        Err(AppError::Message(
+            "Windows 的 yt-dlp 執行元件需要修復。請前往「工具管理」按下「修復 Windows 執行元件」後再試。"
+                .into(),
+        ))
+    }
+}
+
 fn format_transfer_rate(bytes_per_second: f64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = KIB * 1024.0;
@@ -694,6 +754,45 @@ fn clear_active_download(app: &AppHandle, job_id: &str) -> bool {
     false
 }
 
+fn fail_active_download(app: &AppHandle, job_id: &str, message: &str) {
+    let termination = {
+        let state = app.state::<AppState>();
+        let mut active = match state.active_download.lock() {
+            Ok(active) => active,
+            Err(_) => {
+                let _ = app.emit(
+                    "download-error",
+                    ErrorEvent {
+                        job_id,
+                        message,
+                        code: None,
+                    },
+                );
+                return;
+            }
+        };
+        active
+            .as_mut()
+            .filter(|download| download.job_id == job_id)
+            .and_then(|download| download.child.take())
+    };
+
+    let termination_error = termination.map(terminate_child_tree).and_then(Result::err);
+    clear_active_download(app, job_id);
+
+    let final_message = termination_error
+        .map(|error| format!("{message}（停止下載程序時發生錯誤：{error}）"))
+        .unwrap_or_else(|| message.to_owned());
+    let _ = app.emit(
+        "download-error",
+        ErrorEvent {
+            job_id,
+            message: &final_message,
+            code: None,
+        },
+    );
+}
+
 #[cfg(windows)]
 fn terminate_child_tree(child: tauri_plugin_shell::process::CommandChild) -> AppResult<()> {
     let pid = child.pid().to_string();
@@ -783,5 +882,37 @@ mod tests {
     fn formats_observed_file_write_rate() {
         assert_eq!(format_transfer_rate(5.25 * 1024.0 * 1024.0), "5.2 MiB/s");
         assert_eq!(format_transfer_rate(512.0 * 1024.0), "512 KiB/s");
+    }
+
+    #[test]
+    fn stops_a_silent_startup_and_a_stalled_download() {
+        assert!(
+            inactivity_timeout_message(DownloadPhase::Preparing, Duration::from_secs(89)).is_none()
+        );
+        assert!(
+            inactivity_timeout_message(DownloadPhase::Preparing, Duration::from_secs(90)).is_some()
+        );
+        assert!(inactivity_timeout_message(
+            DownloadPhase::Downloading,
+            Duration::from_secs(5 * 60)
+        )
+        .is_some());
+        assert!(inactivity_timeout_message(
+            DownloadPhase::Finalizing,
+            Duration::from_secs(10 * 60)
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn windows_ytdlp_requires_its_adjacent_runtime_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let binary = temporary.path().join("yt-dlp.exe");
+        fs::write(&binary, b"preview").unwrap();
+
+        assert!(ensure_ytdlp_runtime_layout(&binary, true).is_err());
+        fs::create_dir(temporary.path().join("_internal")).unwrap();
+        assert!(ensure_ytdlp_runtime_layout(&binary, true).is_ok());
+        assert!(ensure_ytdlp_runtime_layout(&binary, false).is_ok());
     }
 }

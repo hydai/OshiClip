@@ -88,6 +88,7 @@ function ToolCard({
   const info = TOOL_INFO[tool];
   const current = state.installed.find((item) => item.version === state.selected);
   const hasUpdate = Boolean(available && available.version !== state.selected);
+  const requiresRepair = state.requiresRepair;
   const stageLabel = {
     downloading: "正在下載",
     verifying: "正在驗證 SHA256",
@@ -101,7 +102,9 @@ function ToolCard({
       <div className="tool-main">
         <div className="tool-title-row">
           <div><h3>{info.title}</h3><p>{info.description}</p></div>
-          {current ? (
+          {requiresRepair ? (
+            <span className="repair-badge"><Wrench size={14} /> 需要修復</span>
+          ) : current ? (
             <span className="installed-badge"><CheckCircle2 size={14} /> 已就緒</span>
           ) : (
             <span className="missing-badge">尚未安裝</span>
@@ -126,13 +129,17 @@ function ToolCard({
             {checking ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
             檢查更新
           </button>
-          {(!current || hasUpdate) && (
+          {(!current || hasUpdate || requiresRepair) && (
             <button className="button primary small" type="button" onClick={onInstall} disabled={installing}>
               {installing ? <LoaderCircle className="spin" size={16} /> : <DownloadCloud size={16} />}
-              {current ? `安裝 ${available?.version ?? "最新版"}` : "安裝最新版"}
+              {requiresRepair
+                ? "修復 Windows 執行元件"
+                : current
+                  ? `安裝 ${available?.version ?? "最新版"}`
+                  : "安裝最新版"}
             </button>
           )}
-          {current && !hasUpdate && available && <span className="up-to-date"><Check size={14} /> 已是最新版本</span>}
+          {current && !hasUpdate && available && !requiresRepair && <span className="up-to-date"><Check size={14} /> 已是最新版本</span>}
         </div>
 
         {state.installed.length > 0 && (
@@ -183,8 +190,16 @@ export function ToolsView({ status, refreshStatus, notify }: ToolsViewProps) {
       const latest = releases[0];
       if (!latest) throw new Error(`找不到 ${tool} 可用版本`);
       setAvailable((current) => ({ ...current, [tool]: latest }));
-      const isLatest = status.tools[tool].selected === latest.version;
-      notify(isLatest ? `${tool} 已是最新版本。` : `找到 ${tool} ${latest.version}。`, isLatest ? "success" : "info");
+      const requiresRepair = status.tools[tool].requiresRepair;
+      const isLatest = status.tools[tool].selected === latest.version && !requiresRepair;
+      notify(
+        requiresRepair
+          ? `${tool} 版本雖然是最新，但 Windows 執行元件需要修復。`
+          : isLatest
+            ? `${tool} 已是最新版本。`
+            : `找到 ${tool} ${latest.version}。`,
+        isLatest ? "success" : "info",
+      );
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), "error");
     } finally {
@@ -250,7 +265,7 @@ export function ToolsView({ status, refreshStatus, notify }: ToolsViewProps) {
       </div>
 
       <div className="tool-overview">
-        <div><HardDriveDownload size={18} /><span><strong>{Object.values(status.tools).filter((tool) => tool.selected).length} / 3</strong><small>必要工具已就緒</small></span></div>
+        <div><HardDriveDownload size={18} /><span><strong>{Object.values(status.tools).filter((tool) => tool.selected && !tool.requiresRepair).length} / 3</strong><small>必要工具已就緒</small></span></div>
         <div><Archive size={18} /><span><strong>{Object.values(status.tools).reduce((sum, tool) => sum + tool.installed.length, 0)}</strong><small>本機已安裝版本</small></span></div>
         <div><ShieldCheck size={18} /><span><strong>強制</strong><small>SHA256 完整性驗證</small></span></div>
       </div>

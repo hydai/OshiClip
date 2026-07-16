@@ -62,6 +62,7 @@ let browserStatus: AppStatus = {
   tools: {
     "yt-dlp": {
       selected: "2026.07.11",
+      requiresRepair: false,
       installed: [
         {
           version: "2026.07.11",
@@ -75,6 +76,7 @@ let browserStatus: AppStatus = {
     },
     ffmpeg: {
       selected: "n8.0",
+      requiresRepair: false,
       installed: [
         {
           version: "n8.0",
@@ -88,6 +90,7 @@ let browserStatus: AppStatus = {
     },
     deno: {
       selected: "v2.9.2",
+      requiresRepair: false,
       installed: [
         {
           version: "v2.9.2",
@@ -340,6 +343,7 @@ export async function installTool(
   };
   browserStatus.tools[tool].installed = [installed];
   browserStatus.tools[tool].selected = nextVersion;
+  browserStatus.tools[tool].requiresRepair = false;
   return installed;
 }
 

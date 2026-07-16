@@ -11,6 +11,8 @@ pub enum Tool {
     Deno,
 }
 
+pub const WINDOWS_YTDLP_PACKAGE_ASSET: &str = "yt-dlp_win.zip";
+
 impl Tool {
     pub const ALL: [Self; 3] = [Self::YtDlp, Self::Ffmpeg, Self::Deno];
 
@@ -150,10 +152,11 @@ impl From<&InstalledVersion> for ApiInstalledVersion {
 pub struct ApiToolState {
     pub selected: Option<String>,
     pub installed: Vec<ApiInstalledVersion>,
+    pub requires_repair: bool,
 }
 
-impl From<&ToolState> for ApiToolState {
-    fn from(value: &ToolState) -> Self {
+impl ApiToolState {
+    fn from_tool_state(tool: Tool, value: &ToolState) -> Self {
         Self {
             selected: value.selected.clone(),
             installed: value
@@ -161,8 +164,28 @@ impl From<&ToolState> for ApiToolState {
                 .iter()
                 .map(ApiInstalledVersion::from)
                 .collect(),
+            requires_repair: tool_requires_repair(tool, value, cfg!(windows)),
         }
     }
+}
+
+fn tool_requires_repair(tool: Tool, state: &ToolState, is_windows: bool) -> bool {
+    if !is_windows || tool != Tool::YtDlp {
+        return false;
+    }
+
+    let Some(selected) = state.selected.as_deref() else {
+        return false;
+    };
+    let Some(installed) = state
+        .installed
+        .iter()
+        .find(|installed| installed.version == selected)
+    else {
+        return false;
+    };
+
+    installed.source_url.rsplit('/').next() != Some(WINDOWS_YTDLP_PACKAGE_ASSET)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,7 +213,7 @@ impl AppStatus {
             .map(|tool| {
                 (
                     tool.as_str().to_owned(),
-                    ApiToolState::from(manifest.tools.get(tool)),
+                    ApiToolState::from_tool_state(tool, manifest.tools.get(tool)),
                 )
             })
             .collect();
@@ -320,4 +343,38 @@ pub struct AvailableRelease {
     pub expected_sha256: Option<String>,
     #[serde(skip)]
     pub archive: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selected_ytdlp(source_url: &str) -> ToolState {
+        ToolState {
+            selected: Some("2026.07.04".into()),
+            installed: vec![InstalledVersion {
+                version: "2026.07.04".into(),
+                path: "bin/yt-dlp/2026.07.04/yt-dlp.exe".into(),
+                sha256: "preview".into(),
+                source_url: source_url.into(),
+                size_bytes: 1,
+                installed_at: "2026-07-04T00:00:00Z".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn windows_marks_legacy_single_file_ytdlp_for_repair() {
+        let legacy = selected_ytdlp(
+            "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp.exe",
+        );
+        let package = selected_ytdlp(
+            "https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp_win.zip",
+        );
+
+        assert!(tool_requires_repair(Tool::YtDlp, &legacy, true));
+        assert!(!tool_requires_repair(Tool::YtDlp, &package, true));
+        assert!(!tool_requires_repair(Tool::YtDlp, &legacy, false));
+        assert!(!tool_requires_repair(Tool::Ffmpeg, &legacy, true));
+    }
 }
