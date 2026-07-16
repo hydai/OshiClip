@@ -298,9 +298,6 @@ export function DownloadView({
       !status.tools.deno.requiresRepair,
   );
   const windowsYtdlpNeedsRepair = status.tools["yt-dlp"].requiresRepair;
-  const selectedFormatPreset =
-    FORMAT_PRESET_OPTIONS.find((option) => option.value === formatPreset) ??
-    FORMAT_PRESET_OPTIONS[0];
 
   const formError = useMemo(() => {
     if (!url.trim()) return null;
@@ -528,15 +525,6 @@ export function DownloadView({
             </label>
           </div>
 
-          <div className="timeline-preview" aria-label="片段區間預覽">
-            <div className="timeline-track"><span className="timeline-selection" /></div>
-            <div className="timeline-labels">
-              <span>{startSeconds === null ? "--:--:--" : formatTimecode(startSeconds)}</span>
-              <span>選取片段</span>
-              <span>{endSeconds === null ? "--:--:--" : formatTimecode(endSeconds)}</span>
-            </div>
-          </div>
-
           <label className="field full-width">
             <span>{filenameMetadata ? "輸出檔名格式" : "輸出檔名"}</span>
             <div className="input-shell filename-input">
@@ -609,27 +597,21 @@ export function DownloadView({
             <label className="format-picker-label" htmlFor="format-preset">
               <Gauge size={16} /> 影片規格
             </label>
-            <div className="format-select-control">
-              <div className="format-select-input">
-                <select
-                  id="format-preset"
-                  value={formatPreset}
-                  aria-describedby="format-preset-description"
-                  onChange={(event) =>
-                    setFormatPreset(event.currentTarget.value as FormatPreset)
-                  }
-                >
-                  {FORMAT_PRESET_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={16} aria-hidden="true" />
-              </div>
-              <small id="format-preset-description">
-                {selectedFormatPreset.description}
-              </small>
+            <div className="format-select-input">
+              <select
+                id="format-preset"
+                value={formatPreset}
+                onChange={(event) =>
+                  setFormatPreset(event.currentTarget.value as FormatPreset)
+                }
+              >
+                {FORMAT_PRESET_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label} — {option.description}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={16} aria-hidden="true" />
             </div>
           </div>
 

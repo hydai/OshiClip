@@ -844,54 +844,6 @@ summary:focus-visible {
 
 .time-connector span { flex: 1; border-top: 1px dashed #c5c7cc; }
 
-.timeline-preview {
-  grid-column: 1 / -1;
-  margin-top: -5px;
-  padding: 0 5px;
-}
-
-.timeline-track {
-  position: relative;
-  height: 3px;
-  border-radius: 4px;
-  background: #e8e8e6;
-}
-
-.timeline-selection {
-  position: absolute;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--violet), var(--coral));
-}
-
-.timeline-selection::before,
-.timeline-selection::after {
-  position: absolute;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  border: 2px solid white;
-  border-radius: 50%;
-  background: var(--violet);
-  box-shadow: 0 0 0 1px var(--violet);
-  content: "";
-  transform: translate(-50%, -50%);
-}
-
-.timeline-selection::after { right: 0; background: var(--coral); box-shadow: 0 0 0 1px var(--coral); transform: translate(50%, -50%); }
-
-.timeline-labels {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 7px;
-  color: #a4a8b1;
-  font-size: var(--font-caption);
-  font-variant-numeric: tabular-nums;
-}
-
-.timeline-labels span:nth-child(2) { color: #787bba; font-weight: 700; }
 .filename-input { padding-right: 6px; }
 .extension { padding: 6px 9px; color: #777c88 !important; font-size: var(--font-body) !important; font-weight: 700 !important; border-radius: 7px; background: #ededeb; }
 
@@ -979,12 +931,6 @@ summary:focus-visible {
   font-weight: 700;
 }
 
-.format-select-control {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-}
-
 .format-select-input {
   position: relative;
   display: flex;
@@ -1026,15 +972,6 @@ summary:focus-visible {
   flex: 0 0 auto;
   color: #73798a;
   pointer-events: none;
-}
-
-.format-select-control > small {
-  min-width: 0;
-  padding: 0 4px;
-  overflow-wrap: anywhere;
-  color: #91959f;
-  font-size: var(--font-caption);
-  line-height: 1.35;
 }
 
 .inline-error {
@@ -2304,7 +2241,6 @@ html[data-theme="dark"] :is(
   .field > span,
   .duration-badge,
   .format-picker,
-  .format-select-control > small,
   .form-footnote,
   .tool-title-row p,
   .tool-current span,
@@ -2365,7 +2301,6 @@ html[data-theme="dark"] .filename-template-preview { background: #242c3a; }
 html[data-theme="dark"] .filename-template-preview > strong { color: #e2e6ee; }
 html[data-theme="dark"] .filename-template-preview.invalid { background: #38242a; }
 html[data-theme="dark"] .filename-template-preview.invalid > strong { color: #ff9da1; }
-html[data-theme="dark"] .timeline-track { background: #343c4a; }
 html[data-theme="dark"] .time-connector span { border-color: #4b5566; }
 html[data-theme="dark"] .format-picker,
 html[data-theme="dark"] .version-list { border-color: #313a49; }
