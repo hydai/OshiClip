@@ -128,8 +128,8 @@ export function SettingsView({
             <div>
               <h2>字體大小</h2>
               <p>
-                補充資訊使用 0.9rem；主要內文與操作文字維持 1rem
-                以上，讓內容層級更容易辨認。
+                五級字體以 16px 為中等，每級相差 2px；補充資訊維持
+                0.9rem，讓內容層級更容易辨認。
               </p>
             </div>
           </div>

@@ -34,13 +34,13 @@ describe("UI preferences", () => {
     expect(parseUiPreferences("not-json")).toEqual(DEFAULT_UI_PREFERENCES);
   });
 
-  it("restores the previous five font presets and scales them proportionally", () => {
+  it("maps the previous minimum size to the new medium preset", () => {
     expect(BASE_UI_FONT_PX).toBe(16);
     expect(DEFAULT_UI_PREFERENCES.fontSize).toBe("md");
-    expect(UI_FONT_SIZES.map(uiFontRootPixels)).toEqual([16, 18, 20, 22, 24]);
+    expect(UI_FONT_SIZES.map(uiFontRootPixels)).toEqual([12, 14, 16, 18, 20]);
     expect(MIN_UI_TEXT_SCALE).toBe(0.9);
     expect(UI_FONT_SIZES.map(uiMinimumTextPixels)).toEqual([
-      14.4, 16.2, 18, 19.8, 21.6,
+      10.8, 12.6, 14.4, 16.2, 18,
     ]);
     for (const fontSize of UI_FONT_SIZES) {
       expect(uiFontRootPixels(fontSize)).toBe(

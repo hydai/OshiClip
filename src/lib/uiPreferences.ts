@@ -7,11 +7,11 @@ export type UiFontSize = (typeof UI_FONT_SIZES)[number];
 export const BASE_UI_FONT_PX = 16;
 export const MIN_UI_TEXT_SCALE = 0.9;
 export const UI_FONT_SIZE_SCALES: Record<UiFontSize, number> = {
-  xs: 1,
-  sm: 1.125,
-  md: 1.25,
-  lg: 1.375,
-  xl: 1.5,
+  xs: 0.75,
+  sm: 0.875,
+  md: 1,
+  lg: 1.125,
+  xl: 1.25,
 };
 
 export function uiFontRootPixels(fontSize: UiFontSize): number {
