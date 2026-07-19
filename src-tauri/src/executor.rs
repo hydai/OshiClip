@@ -4,14 +4,20 @@ use crate::{
     error::{AppError, AppResult},
     history::record_completed_download,
     manifest::ManifestStore,
-    models::{ActiveDownloadStatus, AppStatus, DownloadJob, DownloadPhase, DownloadSpec, Tool},
+    models::{
+        ActiveDownloadStatus, AppStatus, DownloadJob, DownloadPhase, DownloadSpec, Manifest, Tool,
+    },
     ActiveDownload, AppState,
 };
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use serde::Serialize;
 use std::{
+    env,
+    ffi::{OsStr, OsString},
     fs,
-    path::PathBuf,
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -22,6 +28,10 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const WAITING_AFTER: Duration = Duration::from_secs(30);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 const STALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const WINDOWS_YTDLP_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_DIAGNOSTIC_LOG_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_DIAGNOSTIC_LINE_BYTES: usize = 16 * 1024;
+const DIAGNOSTIC_LOGS_TO_KEEP: usize = 20;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +39,7 @@ struct LogEvent<'a> {
     job_id: &'a str,
     line: &'a str,
     stream: &'a str,
+    timestamp: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +82,19 @@ pub fn get_app_status(state: State<'_, AppState>) -> AppResult<AppStatus> {
 }
 
 #[tauri::command]
+pub fn get_download_diagnostics(state: State<'_, AppState>, job_id: String) -> AppResult<String> {
+    let path = diagnostic_log_path(&state.app_data, &job_id)?;
+    fs::read_to_string(&path).map_err(|error| {
+        AppError::Message(format!(
+            "無法讀取診斷資訊（{}）：{error}",
+            path.file_name()
+                .and_then(OsStr::to_str)
+                .unwrap_or("download.log")
+        ))
+    })
+}
+
+#[tauri::command]
 pub fn set_output_directory(state: State<'_, AppState>, path: String) -> AppResult<()> {
     let requested = PathBuf::from(path.trim());
     if !requested.is_absolute() {
@@ -93,6 +117,7 @@ pub async fn start_download(
     state: State<'_, AppState>,
     spec: DownloadSpec,
 ) -> AppResult<DownloadJob> {
+    let request_started = Instant::now();
     {
         let active = state
             .active_download
@@ -120,11 +145,73 @@ pub async fn start_download(
 
     let arguments = build_download_args(&spec, ffmpeg_directory, &deno, &output_directory)?;
     let expected_output = output_directory.join(format!("{}.mp4", spec.output_name.trim()));
-    let (receiver, child) = app.shell().command(&ytdlp).args(arguments).spawn()?;
     let job_id = format!(
         "download-{}-{}",
-        child.pid(),
-        chrono::Utc::now().timestamp_millis()
+        std::process::id(),
+        Utc::now().timestamp_millis()
+    );
+    let diagnostic_error = prepare_diagnostic_log(&state.app_data, &job_id)
+        .err()
+        .map(|error| error.to_string());
+    for line in startup_diagnostic_lines(
+        &job_id,
+        StartupDiagnosticContext {
+            manifest: &manifest,
+            spec: &spec,
+            ytdlp: &ytdlp,
+            ffmpeg: &ffmpeg,
+            deno: &deno,
+            output_directory: &output_directory,
+            expected_output: &expected_output,
+            arguments: &arguments,
+        },
+    ) {
+        emit_log(&app, &job_id, &line, "diagnostic");
+    }
+    if let Some(error) = diagnostic_error {
+        emit_log(
+            &app,
+            &job_id,
+            &format!("[OshiClip][診斷] 無法建立持久化診斷檔：{error}"),
+            "stderr",
+        );
+    }
+
+    if cfg!(windows) {
+        verify_windows_ytdlp(&app, &job_id, &ytdlp).await?;
+    }
+
+    let spawn_started = Instant::now();
+    let spawn_result = app
+        .shell()
+        .command(&ytdlp)
+        .args(arguments)
+        .set_raw_out(true)
+        .spawn();
+    let (receiver, child) = match spawn_result {
+        Ok(process) => process,
+        Err(error) => {
+            emit_log(
+                &app,
+                &job_id,
+                &format!("[OshiClip][診斷] 正式 yt-dlp 程序無法建立：{error}"),
+                "stderr",
+            );
+            return Err(AppError::Message(format!(
+                "無法啟動 yt-dlp：{error}。請展開並複製診斷資訊（ID：{job_id}）。"
+            )));
+        }
+    };
+    let child_pid = child.pid();
+    emit_log(
+        &app,
+        &job_id,
+        &format!(
+            "[OshiClip][診斷] 正式程序已建立：pid={child_pid}; spawnMs={}; requestMs={}",
+            spawn_started.elapsed().as_millis(),
+            request_started.elapsed().as_millis()
+        ),
+        "diagnostic",
     );
     let output_path = expected_output.to_string_lossy().into_owned();
     let status = ActiveDownloadStatus {
@@ -171,6 +258,7 @@ pub async fn start_download(
             job_for_task,
             spec_for_task,
             output_for_task,
+            child_pid,
             receiver,
         )
         .await;
@@ -216,11 +304,214 @@ pub fn reveal_output(app: AppHandle, state: State<'_, AppState>, path: String) -
         .map_err(|error| AppError::Message(format!("無法開啟檔案位置：{error}")))
 }
 
+#[derive(Default)]
+struct ProcessOutputStats {
+    stdout_bytes: u64,
+    stderr_bytes: u64,
+    stdout_lines: u64,
+    stderr_lines: u64,
+    first_output_ms: Option<u128>,
+}
+
+impl ProcessOutputStats {
+    fn record_bytes(&mut self, stream: &str, byte_count: usize, elapsed: Duration) {
+        if byte_count == 0 {
+            return;
+        }
+        self.first_output_ms.get_or_insert(elapsed.as_millis());
+        if stream == "stdout" {
+            self.stdout_bytes = self.stdout_bytes.saturating_add(byte_count as u64);
+        } else {
+            self.stderr_bytes = self.stderr_bytes.saturating_add(byte_count as u64);
+        }
+    }
+
+    fn record_line(&mut self, stream: &str, line: &str) {
+        if line.trim().is_empty() {
+            return;
+        }
+        if stream == "stdout" {
+            self.stdout_lines = self.stdout_lines.saturating_add(1);
+        } else {
+            self.stderr_lines = self.stderr_lines.saturating_add(1);
+        }
+    }
+}
+
+async fn verify_windows_ytdlp(app: &AppHandle, job_id: &str, ytdlp: &Path) -> AppResult<()> {
+    let spawn_started = Instant::now();
+    let spawn_result = app
+        .shell()
+        .command(ytdlp)
+        .args(["--ignore-config", "--version"])
+        .set_raw_out(true)
+        .spawn();
+    let (mut receiver, child) = match spawn_result {
+        Ok(process) => process,
+        Err(error) => {
+            emit_log(
+                app,
+                job_id,
+                &format!("[OshiClip][診斷] Windows preflight 無法建立程序：{error}"),
+                "stderr",
+            );
+            return Err(AppError::Message(format!(
+                "yt-dlp 自我檢查無法啟動：{error}。請複製診斷資訊後回報（ID：{job_id}）。"
+            )));
+        }
+    };
+    let pid = child.pid();
+    emit_log(
+        app,
+        job_id,
+        &format!(
+            "[OshiClip][診斷] Windows preflight 程序已建立：pid={pid}; spawnMs={}",
+            spawn_started.elapsed().as_millis()
+        ),
+        "diagnostic",
+    );
+
+    let started = Instant::now();
+    let deadline = tokio::time::sleep(WINDOWS_YTDLP_PROBE_TIMEOUT);
+    tokio::pin!(deadline);
+    let mut child = Some(child);
+    let mut stdout_decoder = LineDecoder::default();
+    let mut stderr_decoder = LineDecoder::default();
+    let mut stdout_lines = Vec::new();
+    let mut stderr_lines = Vec::new();
+    let mut stdout_bytes = 0_u64;
+    let mut stderr_bytes = 0_u64;
+
+    loop {
+        tokio::select! {
+            event = receiver.recv() => {
+                let Some(event) = event else {
+                    let termination_error = child
+                        .take()
+                        .map(terminate_child_tree)
+                        .and_then(Result::err)
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| "none".into());
+                    emit_log(
+                        app,
+                        job_id,
+                        &format!(
+                            "[OshiClip][診斷] Windows preflight 事件通道提早關閉：pid={pid}; stdoutBytes={stdout_bytes}; stderrBytes={stderr_bytes}; terminationError={termination_error}"
+                        ),
+                        "stderr",
+                    );
+                    return Err(AppError::Message(format!(
+                        "yt-dlp 自我檢查意外中止。請複製診斷資訊後回報（ID：{job_id}）。"
+                    )));
+                };
+                match event {
+                    CommandEvent::Stdout(bytes) => {
+                        stdout_bytes = stdout_bytes.saturating_add(bytes.len() as u64);
+                        stdout_lines.extend(stdout_decoder.push(&bytes));
+                    }
+                    CommandEvent::Stderr(bytes) => {
+                        stderr_bytes = stderr_bytes.saturating_add(bytes.len() as u64);
+                        stderr_lines.extend(stderr_decoder.push(&bytes));
+                    }
+                    CommandEvent::Terminated(payload) => {
+                        if let Some(line) = stdout_decoder.flush() {
+                            stdout_lines.push(line);
+                        }
+                        if let Some(line) = stderr_decoder.flush() {
+                            stderr_lines.push(line);
+                        }
+                        let stdout = summarize_probe_lines(&stdout_lines);
+                        let stderr = summarize_probe_lines(&stderr_lines);
+                        emit_log(
+                            app,
+                            job_id,
+                            &format!(
+                                "[OshiClip][診斷] Windows preflight 結束：pid={pid}; code={:?}; signal={:?}; elapsedMs={}; stdoutBytes={stdout_bytes}; stderrBytes={stderr_bytes}; stdout={stdout}; stderr={stderr}",
+                                payload.code,
+                                payload.signal,
+                                started.elapsed().as_millis(),
+                            ),
+                            if payload.code == Some(0) { "diagnostic" } else { "stderr" },
+                        );
+                        if payload.code == Some(0) {
+                            return Ok(());
+                        }
+                        return Err(AppError::Message(format!(
+                            "yt-dlp 自我檢查失敗（結束碼 {:?}）。請複製診斷資訊後回報（ID：{job_id}）。",
+                            payload.code
+                        )));
+                    }
+                    CommandEvent::Error(error) => {
+                        let termination_error = child
+                            .take()
+                            .map(terminate_child_tree)
+                            .and_then(Result::err)
+                            .map(|error| error.to_string())
+                            .unwrap_or_else(|| "none".into());
+                        emit_log(
+                            app,
+                            job_id,
+                            &format!(
+                                "[OshiClip][診斷] Windows preflight 事件錯誤：pid={pid}; error={error}; terminationError={termination_error}"
+                            ),
+                            "stderr",
+                        );
+                        return Err(AppError::Message(format!(
+                            "yt-dlp 自我檢查無法讀取輸出：{error}。請複製診斷資訊後回報（ID：{job_id}）。"
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+            _ = &mut deadline => {
+                let pending_stdout = stdout_decoder.pending_len();
+                let pending_stderr = stderr_decoder.pending_len();
+                let termination_error = child
+                    .take()
+                    .map(terminate_child_tree)
+                    .and_then(Result::err)
+                    .map(|error| error.to_string())
+                    .unwrap_or_else(|| "none".into());
+                emit_log(
+                    app,
+                    job_id,
+                    &format!(
+                        "[OshiClip][診斷] Windows preflight 超時：pid={pid}; elapsedMs={}; stdoutBytes={stdout_bytes}; stderrBytes={stderr_bytes}; pendingStdoutBytes={pending_stdout}; pendingStderrBytes={pending_stderr}; terminationError={termination_error}; 判讀=yt-dlp 連 --version 都無法在 {} 秒內完成，問題位於執行檔初始化、DLL 載入或 Windows 安全軟體掃描，尚未進入 YouTube 網路請求",
+                        started.elapsed().as_millis(),
+                        WINDOWS_YTDLP_PROBE_TIMEOUT.as_secs(),
+                    ),
+                    "stderr",
+                );
+                return Err(AppError::Message(format!(
+                    "yt-dlp 自我檢查在 {} 秒內沒有完成，已停止；尚未連線至 YouTube。請複製診斷資訊後回報（ID：{job_id}）。",
+                    WINDOWS_YTDLP_PROBE_TIMEOUT.as_secs()
+                )));
+            }
+        }
+    }
+}
+
+fn summarize_probe_lines(lines: &[String]) -> String {
+    let summary = lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if summary.is_empty() {
+        "<none>".into()
+    } else {
+        truncate_diagnostic_line(&summary, 2_048)
+    }
+}
+
 async fn monitor_download(
     app: AppHandle,
     job_id: String,
     spec: DownloadSpec,
     expected_output: String,
+    child_pid: u32,
     mut receiver: tokio::sync::mpsc::Receiver<CommandEvent>,
 ) {
     let mut final_output = expected_output.clone();
@@ -235,6 +526,7 @@ async fn monitor_download(
         FfmpegProgressTracker::new(spec.end_seconds.saturating_sub(spec.start_seconds));
     let mut stdout_lines = LineDecoder::default();
     let mut stderr_lines = LineDecoder::default();
+    let mut output_stats = ProcessOutputStats::default();
 
     emit_log(
         &app,
@@ -258,7 +550,12 @@ async fn monitor_download(
                 let Some(event) = event else { break };
                 match event {
                     CommandEvent::Stdout(bytes) => {
+                        output_stats.record_bytes("stdout", bytes.len(), started.elapsed());
+                        if !bytes.is_empty() {
+                            last_activity = Instant::now();
+                        }
                         for line in stdout_lines.push(&bytes) {
+                            output_stats.record_line("stdout", &line);
                             handle_stdout_line(
                                 DownloadEventTarget {
                                     app: &app,
@@ -274,27 +571,69 @@ async fn monitor_download(
                         }
                     }
                     CommandEvent::Stderr(bytes) => {
+                        output_stats.record_bytes("stderr", bytes.len(), started.elapsed());
+                        if !bytes.is_empty() {
+                            last_activity = Instant::now();
+                        }
                         for line in stderr_lines.push(&bytes) {
-                            let line = line.trim();
-                            if !line.is_empty() {
-                                last_activity = Instant::now();
-                                if let Some(progress) = parse_progress(line) {
-                                    base_phase = DownloadPhase::Downloading;
-                                    emit_progress_update(
-                                        &app,
-                                        &job_id,
-                                        &progress,
-                                        DownloadPhase::Downloading,
-                                        started.elapsed().as_secs(),
-                                    );
-                                } else {
-                                    emit_log(&app, &job_id, line, "stderr");
-                                }
-                            }
+                            output_stats.record_line("stderr", &line);
+                            handle_stderr_line(
+                                &app,
+                                &job_id,
+                                &line,
+                                started,
+                                &mut last_activity,
+                                &mut base_phase,
+                            );
                         }
                     }
                     CommandEvent::Terminated(payload) => {
                         saw_termination = true;
+                        if let Some(line) = stdout_lines.flush() {
+                            output_stats.record_line("stdout", &line);
+                            handle_stdout_line(
+                                DownloadEventTarget {
+                                    app: &app,
+                                    job_id: &job_id,
+                                },
+                                &line,
+                                &mut final_output,
+                                &mut ffmpeg_progress,
+                                started,
+                                &mut last_activity,
+                                &mut base_phase,
+                            );
+                        }
+                        if let Some(line) = stderr_lines.flush() {
+                            output_stats.record_line("stderr", &line);
+                            handle_stderr_line(
+                                &app,
+                                &job_id,
+                                &line,
+                                started,
+                                &mut last_activity,
+                                &mut base_phase,
+                            );
+                        }
+                        emit_log(
+                            &app,
+                            &job_id,
+                            &format!(
+                                "[OshiClip][診斷] 程序結束：pid={child_pid}; code={:?}; signal={:?}; {}",
+                                payload.code,
+                                payload.signal,
+                                process_activity_summary(
+                                    &output_stats,
+                                    stdout_lines.pending_len(),
+                                    stderr_lines.pending_len(),
+                                    started.elapsed(),
+                                    Instant::now().duration_since(last_activity),
+                                    base_phase,
+                                    partial_output_size(&expected_output),
+                                )
+                            ),
+                            "diagnostic",
+                        );
                         let cancelled = clear_active_download(&app, &job_id);
                         if cancelled {
                             let _ = app.emit(
@@ -320,6 +659,12 @@ async fn monitor_download(
                                 },
                             );
                         } else {
+                            emit_log(
+                                &app,
+                                &job_id,
+                                "[OshiClip] yt-dlp 回傳非零結束碼；上方 verbose 輸出與程序摘要可用來定位原因。",
+                                "stderr",
+                            );
                             let _ = app.emit(
                                 "download-error",
                                 ErrorEvent {
@@ -332,8 +677,25 @@ async fn monitor_download(
                         break;
                     }
                     CommandEvent::Error(error) => {
+                        emit_log(
+                            &app,
+                            &job_id,
+                            &format!(
+                                "[OshiClip][診斷] 程序事件通道錯誤：pid={child_pid}; error={error}; {}",
+                                process_activity_summary(
+                                    &output_stats,
+                                    stdout_lines.pending_len(),
+                                    stderr_lines.pending_len(),
+                                    started.elapsed(),
+                                    Instant::now().duration_since(last_activity),
+                                    base_phase,
+                                    partial_output_size(&expected_output),
+                                )
+                            ),
+                            "stderr",
+                        );
                         let message = format!(
-                            "無法讀取 yt-dlp 的執行結果：{error}。請前往工具管理修復 yt-dlp 後再試。"
+                            "無法讀取 yt-dlp 的執行結果：{error}。請複製診斷資訊後回報。"
                         );
                         emit_log(&app, &job_id, &format!("[OshiClip] {message}"), "stderr");
                         fail_active_download(&app, &job_id, &message);
@@ -361,6 +723,50 @@ async fn monitor_download(
                     base_phase,
                     now.duration_since(last_activity),
                 ) {
+                    emit_log(
+                        &app,
+                        &job_id,
+                        &format!(
+                            "[OshiClip][診斷] watchdog 觸發：pid={child_pid}; {}; 判讀={}",
+                            process_activity_summary(
+                                &output_stats,
+                                stdout_lines.pending_len(),
+                                stderr_lines.pending_len(),
+                                started.elapsed(),
+                                now.duration_since(last_activity),
+                                base_phase,
+                                current_size,
+                            ),
+                            timeout_interpretation(&output_stats, base_phase),
+                        ),
+                        "stderr",
+                    );
+                    if let Some(line) = stdout_lines.flush() {
+                        output_stats.record_line("stdout", &line);
+                        handle_stdout_line(
+                            DownloadEventTarget {
+                                app: &app,
+                                job_id: &job_id,
+                            },
+                            &line,
+                            &mut final_output,
+                            &mut ffmpeg_progress,
+                            started,
+                            &mut last_activity,
+                            &mut base_phase,
+                        );
+                    }
+                    if let Some(line) = stderr_lines.flush() {
+                        output_stats.record_line("stderr", &line);
+                        handle_stderr_line(
+                            &app,
+                            &job_id,
+                            &line,
+                            started,
+                            &mut last_activity,
+                            &mut base_phase,
+                        );
+                    }
                     emit_log(&app, &job_id, &format!("[OshiClip] {message}"), "stderr");
                     fail_active_download(&app, &job_id, message);
                     saw_termination = true;
@@ -395,9 +801,37 @@ async fn monitor_download(
                         "[OshiClip] 已有 30 秒沒有收到新資料；若仍無回應，OshiClip 會自動停止並顯示處理方式。",
                         "stderr",
                     );
+                    emit_log(
+                        &app,
+                        &job_id,
+                        &format!(
+                            "[OshiClip][診斷] 等待快照：pid={child_pid}; {}",
+                            process_activity_summary(
+                                &output_stats,
+                                stdout_lines.pending_len(),
+                                stderr_lines.pending_len(),
+                                started.elapsed(),
+                                now.duration_since(last_activity),
+                                base_phase,
+                                current_size,
+                            )
+                        ),
+                        "diagnostic",
+                    );
                     waiting_reported = true;
                 } else if !waiting && waiting_reported {
-                    emit_log(&app, &job_id, "[OshiClip] 下載工具已恢復輸出。", "stdout");
+                    emit_log(
+                        &app,
+                        &job_id,
+                        &format!(
+                            "[OshiClip] 下載工具已恢復輸出。{}",
+                            output_stats
+                                .first_output_ms
+                                .map(|milliseconds| format!(" firstOutputMs={milliseconds}"))
+                                .unwrap_or_default()
+                        ),
+                        "stdout",
+                    );
                     waiting_reported = false;
                 }
 
@@ -408,6 +842,23 @@ async fn monitor_download(
     }
 
     if !saw_termination {
+        emit_log(
+            &app,
+            &job_id,
+            &format!(
+                "[OshiClip][診斷] 程序事件通道在 Terminated 事件前關閉：pid={child_pid}; {}",
+                process_activity_summary(
+                    &output_stats,
+                    stdout_lines.pending_len(),
+                    stderr_lines.pending_len(),
+                    started.elapsed(),
+                    Instant::now().duration_since(last_activity),
+                    base_phase,
+                    partial_output_size(&expected_output),
+                )
+            ),
+            "stderr",
+        );
         clear_active_download(&app, &job_id);
         let _ = app.emit(
             "download-error",
@@ -511,6 +962,69 @@ fn handle_stdout_line(
     }
 }
 
+fn handle_stderr_line(
+    app: &AppHandle,
+    job_id: &str,
+    raw_line: &str,
+    started: Instant,
+    last_activity: &mut Instant,
+    base_phase: &mut DownloadPhase,
+) {
+    let line = raw_line.trim();
+    if line.is_empty() {
+        return;
+    }
+    *last_activity = Instant::now();
+    if let Some(progress) = parse_progress(line) {
+        *base_phase = DownloadPhase::Downloading;
+        emit_progress_update(
+            app,
+            job_id,
+            &progress,
+            DownloadPhase::Downloading,
+            started.elapsed().as_secs(),
+        );
+    } else {
+        emit_log(app, job_id, line, "stderr");
+    }
+}
+
+fn process_activity_summary(
+    stats: &ProcessOutputStats,
+    pending_stdout_bytes: usize,
+    pending_stderr_bytes: usize,
+    elapsed: Duration,
+    inactive: Duration,
+    phase: DownloadPhase,
+    partial_bytes: u64,
+) -> String {
+    format!(
+        "phase={phase:?}; elapsedMs={}; inactiveMs={}; stdoutBytes={}; stderrBytes={}; stdoutLines={}; stderrLines={}; pendingStdoutBytes={pending_stdout_bytes}; pendingStderrBytes={pending_stderr_bytes}; firstOutputMs={}; partialBytes={partial_bytes}",
+        elapsed.as_millis(),
+        inactive.as_millis(),
+        stats.stdout_bytes,
+        stats.stderr_bytes,
+        stats.stdout_lines,
+        stats.stderr_lines,
+        stats
+            .first_output_ms
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".into()),
+    )
+}
+
+fn timeout_interpretation(stats: &ProcessOutputStats, phase: DownloadPhase) -> &'static str {
+    if stats.stdout_bytes == 0 && stats.stderr_bytes == 0 {
+        "程序已建立但從未寫入 stdout/stderr；較可能卡在執行檔初始化、DLL 載入或 Windows 安全軟體掃描"
+    } else if stats.stdout_lines == 0 && stats.stderr_lines == 0 {
+        "程序曾寫入資料但沒有完整換行；已在停止前保留殘留 bytes"
+    } else if phase == DownloadPhase::Preparing {
+        "yt-dlp 已成功啟動，但在來源解析或網路請求階段停止產生新資料"
+    } else {
+        "下載已開始，但資料傳輸或 ffmpeg 處理停止產生進度"
+    }
+}
+
 fn emit_progress_update(
     app: &AppHandle,
     job_id: &str,
@@ -537,14 +1051,450 @@ fn emit_download_status(app: &AppHandle, status: &ActiveDownloadStatus) {
 }
 
 fn emit_log(app: &AppHandle, job_id: &str, line: &str, stream: &str) {
+    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let line = redact_diagnostic_text(line);
+    append_diagnostic_log(app, job_id, &timestamp, stream, &line);
     let _ = app.emit(
         "download-log",
         LogEvent {
             job_id,
-            line,
+            line: &line,
             stream,
+            timestamp: &timestamp,
         },
     );
+}
+
+struct StartupDiagnosticContext<'a> {
+    manifest: &'a Manifest,
+    spec: &'a DownloadSpec,
+    ytdlp: &'a Path,
+    ffmpeg: &'a Path,
+    deno: &'a Path,
+    output_directory: &'a Path,
+    expected_output: &'a Path,
+    arguments: &'a [OsString],
+}
+
+fn startup_diagnostic_lines(job_id: &str, context: StartupDiagnosticContext<'_>) -> Vec<String> {
+    let StartupDiagnosticContext {
+        manifest,
+        spec,
+        ytdlp,
+        ffmpeg,
+        deno,
+        output_directory,
+        expected_output,
+        arguments,
+    } = context;
+    let build = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let current_executable = env::current_exe()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|error| format!("unavailable:{error}"));
+    let current_directory = env::current_dir()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|error| format!("unavailable:{error}"));
+    let video_id = diagnostic_video_id(&spec.url).unwrap_or_else(|| "unknown".into());
+    let write_probe = match tempfile::Builder::new()
+        .prefix(".oshiclip-write-test-")
+        .tempfile_in(output_directory)
+    {
+        Ok(file) => {
+            drop(file);
+            "ok".to_owned()
+        }
+        Err(error) => format!("failed:{error}"),
+    };
+
+    let mut lines = vec![
+        format!(
+            "[OshiClip][診斷] session={job_id}; reportVersion=1; startedAt={}",
+            Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+        ),
+        format!(
+            "[OshiClip][診斷] appVersion={}; build={build}; target={}/{}; platformVersion={}; executable={current_executable}; cwd={current_directory}",
+            env!("CARGO_PKG_VERSION"),
+            env::consts::OS,
+            env::consts::ARCH,
+            platform_version(),
+        ),
+        format!(
+            "[OshiClip][診斷] environment: OS={}; PROCESSOR_ARCHITECTURE={}; PROCESSOR_IDENTIFIER={}; NUMBER_OF_PROCESSORS={}; LANG={}; TEMP={}; HTTP_PROXY={}; HTTPS_PROXY={}; ALL_PROXY={}",
+            environment_value("OS"),
+            environment_value("PROCESSOR_ARCHITECTURE"),
+            environment_value("PROCESSOR_IDENTIFIER"),
+            environment_value("NUMBER_OF_PROCESSORS"),
+            environment_value("LANG"),
+            environment_value("TEMP"),
+            environment_presence("HTTP_PROXY"),
+            environment_presence("HTTPS_PROXY"),
+            environment_presence("ALL_PROXY"),
+        ),
+        tool_diagnostic_line(manifest, Tool::YtDlp, ytdlp),
+        tool_diagnostic_line(manifest, Tool::Ffmpeg, ffmpeg),
+        tool_diagnostic_line(manifest, Tool::Deno, deno),
+        format!(
+            "[OshiClip][診斷] task: videoId={video_id}; start={}; end={}; duration={}; preset={:?}; outputName={}",
+            spec.start_seconds,
+            spec.end_seconds,
+            spec.end_seconds.saturating_sub(spec.start_seconds),
+            spec.format_preset,
+            spec.output_name.trim(),
+        ),
+        format!(
+            "[OshiClip][診斷] output: directory={}; writeProbe={write_probe}; expected={}; expectedExists={}; partialExists={}; partialBytes={}",
+            output_directory.display(),
+            expected_output.display(),
+            expected_output.exists(),
+            PathBuf::from(format!("{}.part", expected_output.display())).exists(),
+            partial_output_size(&expected_output.to_string_lossy()),
+        ),
+        format!(
+            "[OshiClip][診斷] argv: {} {}",
+            ytdlp.display(),
+            format_diagnostic_arguments(arguments),
+        ),
+    ];
+    if cfg!(windows) {
+        lines.push(windows_ytdlp_runtime_line(ytdlp));
+        lines.push(format!(
+            "[OshiClip][診斷] Windows preflight: command=yt-dlp --ignore-config --version; timeoutSeconds={}",
+            WINDOWS_YTDLP_PROBE_TIMEOUT.as_secs()
+        ));
+    }
+    lines
+}
+
+fn tool_diagnostic_line(manifest: &Manifest, tool: Tool, path: &Path) -> String {
+    let state = manifest.tools.get(tool);
+    let installed = state.selected.as_deref().and_then(|selected| {
+        state
+            .installed
+            .iter()
+            .find(|version| version.version == selected)
+    });
+    let metadata_bytes = fs::metadata(path)
+        .map(|metadata| metadata.len().to_string())
+        .unwrap_or_else(|error| format!("unavailable:{error}"));
+    let selected = state.selected.as_deref().unwrap_or("none");
+    let asset = installed
+        .map(|version| {
+            version
+                .source_url
+                .split('?')
+                .next()
+                .unwrap_or(&version.source_url)
+                .rsplit('/')
+                .next()
+                .unwrap_or("unknown")
+        })
+        .unwrap_or("unknown");
+    let recorded_bytes = installed
+        .map(|version| version.size_bytes.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let recorded_hash = installed
+        .map(|version| short_hash(&version.sha256))
+        .unwrap_or_else(|| "unknown".into());
+    format!(
+        "[OshiClip][診斷] tool={tool}; selected={selected}; asset={asset}; path={}; binaryBytes={metadata_bytes}; recordedPackageBytes={recorded_bytes}; recordedSha256={recorded_hash}",
+        path.display(),
+    )
+}
+
+fn short_hash(value: &str) -> String {
+    if value.is_empty() {
+        "unknown".into()
+    } else {
+        value.chars().take(16).collect()
+    }
+}
+
+fn diagnostic_video_id(value: &str) -> Option<String> {
+    let url = url::Url::parse(value.trim()).ok()?;
+    if url
+        .host_str()
+        .is_some_and(|host| host.ends_with("youtu.be"))
+    {
+        return url
+            .path_segments()
+            .and_then(|mut segments| segments.next())
+            .map(str::to_owned);
+    }
+    url.query_pairs()
+        .find(|(key, _)| key == "v")
+        .map(|(_, value)| value.into_owned())
+}
+
+fn environment_value(name: &str) -> String {
+    env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unset".into())
+}
+
+fn environment_presence(name: &str) -> &'static str {
+    if env::var_os(name).is_some() {
+        "set"
+    } else {
+        "unset"
+    }
+}
+
+#[cfg(windows)]
+fn platform_version() -> String {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new("cmd.exe")
+        .args(["/D", "/C", "ver"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .ok()
+        .filter(|version| !version.is_empty())
+        .unwrap_or_else(|| "unavailable".into())
+}
+
+#[cfg(not(windows))]
+fn platform_version() -> String {
+    env::consts::OS.into()
+}
+
+fn format_diagnostic_arguments(arguments: &[OsString]) -> String {
+    arguments
+        .iter()
+        .map(|argument| {
+            let value = argument.to_string_lossy();
+            if value.chars().any(char::is_whitespace) {
+                format!("{value:?}")
+            } else {
+                value.into_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn windows_ytdlp_runtime_line(ytdlp: &Path) -> String {
+    let internal = ytdlp
+        .parent()
+        .map(|parent| parent.join("_internal"))
+        .unwrap_or_default();
+    let (file_count, total_bytes, truncated) = directory_inventory(&internal, 20_000);
+    let python_dlls = fs::read_dir(&internal)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            name.starts_with("python") && name.ends_with(".dll")
+        })
+        .count();
+    format!(
+        "[OshiClip][診斷] Windows runtime: internalExists={}; ytDlpModuleExists={}; pythonDlls={python_dlls}; files={file_count}; bytes={total_bytes}; inventoryTruncated={truncated}; executableZoneIdentifier={}",
+        internal.is_dir(),
+        internal.join("yt_dlp").is_dir(),
+        has_zone_identifier(ytdlp),
+    )
+}
+
+fn directory_inventory(root: &Path, limit: u64) -> (u64, u64, bool) {
+    if !root.is_dir() {
+        return (0, 0, false);
+    }
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = 0_u64;
+    let mut bytes = 0_u64;
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            } else if file_type.is_file() {
+                files = files.saturating_add(1);
+                bytes = bytes
+                    .saturating_add(entry.metadata().map(|metadata| metadata.len()).unwrap_or(0));
+                if files >= limit {
+                    return (files, bytes, true);
+                }
+            }
+        }
+    }
+    (files, bytes, false)
+}
+
+#[cfg(windows)]
+fn has_zone_identifier(path: &Path) -> bool {
+    let mut alternate_stream = path.as_os_str().to_os_string();
+    alternate_stream.push(":Zone.Identifier");
+    fs::metadata(PathBuf::from(alternate_stream)).is_ok()
+}
+
+#[cfg(not(windows))]
+fn has_zone_identifier(_path: &Path) -> bool {
+    false
+}
+
+fn diagnostic_log_path(app_data: &Path, job_id: &str) -> AppResult<PathBuf> {
+    if job_id.len() > 96
+        || !job_id.starts_with("download-")
+        || !job_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        return Err(AppError::Message("診斷資訊識別碼無效".into()));
+    }
+    Ok(app_data.join("diagnostics").join(format!("{job_id}.log")))
+}
+
+fn prepare_diagnostic_log(app_data: &Path, job_id: &str) -> AppResult<()> {
+    let path = diagnostic_log_path(app_data, job_id)?;
+    let directory = path
+        .parent()
+        .ok_or_else(|| AppError::Message("診斷資訊路徑無效".into()))?;
+    fs::create_dir_all(directory)?;
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)?
+        .sync_all()?;
+    prune_diagnostic_logs(directory, DIAGNOSTIC_LOGS_TO_KEEP);
+    Ok(())
+}
+
+fn prune_diagnostic_logs(directory: &Path, keep: usize) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    let mut logs = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("download-") || !name.ends_with(".log") {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            metadata
+                .is_file()
+                .then(|| (metadata.modified().ok(), entry.path()))
+        })
+        .collect::<Vec<_>>();
+    logs.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    for (_, path) in logs.into_iter().skip(keep) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn append_diagnostic_log(app: &AppHandle, job_id: &str, timestamp: &str, stream: &str, line: &str) {
+    let state = app.state::<AppState>();
+    let Ok(path) = diagnostic_log_path(&state.app_data, job_id) else {
+        return;
+    };
+    if fs::metadata(&path).is_ok_and(|metadata| metadata.len() >= MAX_DIAGNOSTIC_LOG_BYTES) {
+        return;
+    }
+    let line = truncate_diagnostic_line(line, MAX_DIAGNOSTIC_LINE_BYTES);
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = writeln!(file, "{timestamp} [{stream}] {line}");
+}
+
+fn truncate_diagnostic_line(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… [truncated]", &value[..end])
+}
+
+fn redact_diagnostic_text(value: &str) -> String {
+    let mut redacted = value.to_owned();
+    for (name, placeholder) in [("USERPROFILE", "%USERPROFILE%"), ("HOME", "$HOME")] {
+        let Some(home) = env::var_os(name) else {
+            continue;
+        };
+        let home = home.to_string_lossy();
+        if home.trim().is_empty() {
+            continue;
+        }
+        redacted = redacted.replace(home.as_ref(), placeholder);
+        let alternate = if home.contains('\\') {
+            home.replace('\\', "/")
+        } else {
+            home.replace('/', "\\")
+        };
+        redacted = redacted.replace(&alternate, placeholder);
+    }
+    redact_url_secrets(&redacted)
+}
+
+fn redact_url_secrets(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while let Some(relative_start) = next_url_start(&value[cursor..]) {
+        let start = cursor + relative_start;
+        output.push_str(&value[cursor..start]);
+        let tail = &value[start..];
+        let end = tail
+            .char_indices()
+            .find_map(|(index, character)| {
+                (index > 0
+                    && (character.is_whitespace()
+                        || matches!(character, '\'' | '"' | '<' | '>' | '{' | '}')))
+                .then_some(index)
+            })
+            .unwrap_or(tail.len());
+        let token = &tail[..end];
+        let (candidate, suffix) = split_url_suffix(token);
+        if let Ok(mut url) = url::Url::parse(candidate) {
+            if !url.username().is_empty() || url.password().is_some() {
+                let _ = url.set_username("redacted");
+                let _ = url.set_password(Some("redacted"));
+            }
+            if url.query().is_some() {
+                url.set_query(Some("redacted"));
+            }
+            if url.fragment().is_some() {
+                url.set_fragment(Some("redacted"));
+            }
+            output.push_str(url.as_str());
+            output.push_str(suffix);
+        } else {
+            output.push_str(token);
+        }
+        cursor = start + end;
+    }
+    output.push_str(&value[cursor..]);
+    output
+}
+
+fn next_url_start(value: &str) -> Option<usize> {
+    [value.find("https://"), value.find("http://")]
+        .into_iter()
+        .flatten()
+        .min()
+}
+
+fn split_url_suffix(value: &str) -> (&str, &str) {
+    let trimmed = value.trim_end_matches([',', ';', ')', ']']);
+    let suffix = &value[trimmed.len()..];
+    (trimmed, suffix)
 }
 
 fn update_active_download(
@@ -573,7 +1523,7 @@ fn inactivity_timeout_message(
 ) -> Option<&'static str> {
     match phase {
         DownloadPhase::Preparing if inactive_for >= STARTUP_TIMEOUT => Some(
-            "yt-dlp 啟動後 90 秒仍未回應，已停止任務。請前往「工具管理」修復 yt-dlp，再重新下載。",
+            "yt-dlp 在準備來源時連續 90 秒沒有新輸出，已停止任務。診斷資訊已保留，請按「複製診斷資訊」後回報。",
         ),
         DownloadPhase::Downloading if inactive_for >= STALL_TIMEOUT => {
             Some("下載工具已連續 5 分鐘沒有進度，已停止任務。請檢查網路後重新下載。")
@@ -614,15 +1564,31 @@ impl LineDecoder {
     fn push(&mut self, bytes: &[u8]) -> Vec<String> {
         self.buffer.extend_from_slice(bytes);
         let mut lines = Vec::new();
-        while let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') {
-            let mut line = self.buffer.drain(..=newline).collect::<Vec<_>>();
+        while let Some(delimiter) = self
+            .buffer
+            .iter()
+            .position(|byte| matches!(*byte, b'\n' | b'\r'))
+        {
+            let mut line = self.buffer.drain(..=delimiter).collect::<Vec<_>>();
             line.pop();
-            if line.last() == Some(&b'\r') {
-                line.pop();
+            if !line.is_empty() {
+                lines.push(String::from_utf8_lossy(&line).into_owned());
             }
-            lines.push(String::from_utf8_lossy(&line).into_owned());
         }
         lines
+    }
+
+    fn flush(&mut self) -> Option<String> {
+        if self.buffer.is_empty() {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&self.buffer).into_owned();
+        self.buffer.clear();
+        (!line.trim().is_empty()).then_some(line)
+    }
+
+    fn pending_len(&self) -> usize {
+        self.buffer.len()
     }
 }
 
@@ -876,6 +1842,52 @@ mod tests {
             decoder.push(&output[split..]),
             vec!["FINAL /tmp/六等星.mp4", "progress=end"]
         );
+    }
+
+    #[test]
+    fn decodes_carriage_return_lines_and_flushes_partial_output() {
+        let mut decoder = LineDecoder::default();
+        assert_eq!(
+            decoder.push(b"first\rsecond\r\nthird\npartial"),
+            vec!["first", "second", "third"]
+        );
+        assert_eq!(decoder.pending_len(), 7);
+        assert_eq!(decoder.flush().as_deref(), Some("partial"));
+        assert_eq!(decoder.pending_len(), 0);
+    }
+
+    #[test]
+    fn redacts_url_credentials_queries_and_fragments() {
+        let redacted = redact_url_secrets(
+            "source=https://www.youtube.com/watch?v=secret-video&t=30 proxy=http://user:password@proxy.example:8080/path?token=secret#private",
+        );
+        assert!(!redacted.contains("secret-video"));
+        assert!(!redacted.contains("password"));
+        assert!(!redacted.contains("token=secret"));
+        assert!(!redacted.contains("private"));
+        assert!(redacted.contains("https://www.youtube.com/watch?redacted"));
+        assert!(
+            redacted.contains("http://redacted:redacted@proxy.example:8080/path?redacted#redacted")
+        );
+    }
+
+    #[test]
+    fn diagnostic_paths_reject_traversal_and_accept_generated_ids() {
+        let root = Path::new("/app-data");
+        assert!(diagnostic_log_path(root, "../../manifest").is_err());
+        assert!(diagnostic_log_path(root, "download-123/escape").is_err());
+        assert_eq!(
+            diagnostic_log_path(root, "download-123-456").unwrap(),
+            root.join("diagnostics/download-123-456.log")
+        );
+    }
+
+    #[test]
+    fn truncates_diagnostic_lines_on_utf8_boundaries() {
+        let value = "診斷資訊".repeat(20);
+        let truncated = truncate_diagnostic_line(&value, 17);
+        assert!(truncated.ends_with("… [truncated]"));
+        assert!(truncated.is_char_boundary(truncated.len()));
     }
 
     #[test]

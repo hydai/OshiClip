@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronUp,
   Clock3,
+  Copy,
   ExternalLink,
   FileVideo2,
   FolderOpen,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import {
   cancelDownload,
+  getDownloadDiagnostics,
   onDesktopEvent,
   revealOutput,
   startDownload,
@@ -97,6 +99,38 @@ const FORMAT_PRESET_OPTIONS: ReadonlyArray<{
   },
 ];
 
+function formatDownloadLogTimestamp(timestamp: string): string {
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return timestamp;
+  return parsed.toLocaleTimeString("zh-TW", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3,
+  });
+}
+
+async function copyText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Some Windows WebView policies expose Clipboard but deny direct writes.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("系統拒絕存取剪貼簿");
+}
+
 export function DownloadView({
   status,
   prefill,
@@ -149,6 +183,11 @@ export function DownloadView({
   );
   const [logs, setLogs] = useState<string[]>([]);
   const [logsOpen, setLogsOpen] = useState(false);
+  const [diagnosticJobId, setDiagnosticJobId] = useState<string | null>(
+    status.activeJobId,
+  );
+  const [copyingDiagnostics, setCopyingDiagnostics] = useState(false);
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
   const [resultPath, setResultPath] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -176,6 +215,7 @@ export function DownloadView({
     if (!active) return;
     const isNewJob = jobIdRef.current !== active.jobId;
     jobIdRef.current = active.jobId;
+    setDiagnosticJobId(active.jobId);
     setJobId(active.jobId);
     setDownloadState("running");
     setPhase(active.phase);
@@ -234,7 +274,12 @@ export function DownloadView({
       }),
       onDesktopEvent("download-log", (event) => {
         if (jobIdRef.current && event.jobId !== jobIdRef.current) return;
-        setLogs((current) => [...current.slice(-199), event.line]);
+        setDiagnosticJobId(event.jobId);
+        const timestamp = formatDownloadLogTimestamp(event.timestamp);
+        setLogs((current) => [
+          ...current.slice(-999),
+          `[${timestamp}] [${event.stream}] ${event.line}`,
+        ]);
       }),
       onDesktopEvent("download-done", (event) => {
         if (jobIdRef.current && event.jobId !== jobIdRef.current) return;
@@ -242,6 +287,7 @@ export function DownloadView({
         setProgress(100);
         setPhase("finalizing");
         setResultPath(event.outputPath);
+        setDiagnosticJobId(event.jobId);
         jobIdRef.current = null;
         setJobId(null);
         notify("片段下載完成。", "success");
@@ -251,6 +297,8 @@ export function DownloadView({
         if (jobIdRef.current && event.jobId !== jobIdRef.current) return;
         setDownloadState("error");
         setErrorMessage(event.message);
+        setDiagnosticJobId(event.jobId);
+        setLogsOpen(true);
         jobIdRef.current = null;
         setJobId(null);
         notify(event.message, "error");
@@ -390,11 +438,15 @@ export function DownloadView({
     setDownloadedBytes(0);
     setElapsedSeconds(0);
     setLogs([]);
+    setLogsOpen(false);
+    setDiagnosticJobId(null);
+    setDiagnosticsCopied(false);
     setResultPath(null);
     setErrorMessage(null);
     try {
       const job = await startDownload(spec);
       jobIdRef.current = job.jobId;
+      setDiagnosticJobId(job.jobId);
       setJobId(job.jobId);
       setResultPath(job.outputPath);
       setDownloadState("running");
@@ -403,6 +455,7 @@ export function DownloadView({
       const message = error instanceof Error ? error.message : String(error);
       setDownloadState("error");
       setErrorMessage(message);
+      setLogsOpen(true);
       notify(message, "error");
     }
   }
@@ -413,6 +466,32 @@ export function DownloadView({
       await cancelDownload(jobId);
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), "error");
+    }
+  }
+
+  async function handleCopyDiagnostics() {
+    if (!logs.length && !diagnosticJobId) return;
+    setCopyingDiagnostics(true);
+    try {
+      let report = logs.join("\n");
+      if (diagnosticJobId) {
+        try {
+          report = await getDownloadDiagnostics(diagnosticJobId);
+        } catch {
+          // The in-memory event log is still useful if persistence was unavailable.
+        }
+      }
+      await copyText(report);
+      setDiagnosticsCopied(true);
+      notify("診斷資訊已複製；可直接貼到問題回報中。", "success");
+      window.setTimeout(() => setDiagnosticsCopied(false), 2400);
+    } catch (error) {
+      notify(
+        `無法複製診斷資訊：${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+    } finally {
+      setCopyingDiagnostics(false);
     }
   }
 
@@ -702,17 +781,30 @@ export function DownloadView({
             </button>
           )}
 
-          <button
-            className="log-toggle"
-            type="button"
-            onClick={() => setLogsOpen((open) => !open)}
-            aria-expanded={logsOpen}
-          >
-            <span><TerminalSquare size={15} /> 執行日誌</span>
-            <span>{logs.length} 行 {logsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
-          </button>
+          <div className="log-toolbar">
+            <button
+              className="log-toggle"
+              type="button"
+              onClick={() => setLogsOpen((open) => !open)}
+              aria-expanded={logsOpen}
+            >
+              <span><TerminalSquare size={15} /> 執行與診斷日誌</span>
+              <span>{logs.length} 行 {logsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
+            </button>
+            {(logs.length > 0 || diagnosticJobId) && (
+              <button
+                className="log-copy"
+                type="button"
+                onClick={() => void handleCopyDiagnostics()}
+                disabled={copyingDiagnostics}
+              >
+                {diagnosticsCopied ? <Check size={14} /> : <Copy size={14} />}
+                {diagnosticsCopied ? "已複製" : copyingDiagnostics ? "複製中…" : "複製診斷資訊"}
+              </button>
+            )}
+          </div>
           {logsOpen && (
-            <pre className="log-panel">{logs.length ? logs.join("\n") : "尚無日誌。開始任務後，完整輸出會保留在這裡。"}</pre>
+            <pre className="log-panel">{logs.length ? logs.join("\n") : "尚無日誌。開始任務後，完整輸出與環境診斷會保留在這裡。"}</pre>
           )}
 
           <div className="progress-footer">

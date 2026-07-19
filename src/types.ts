@@ -158,7 +158,8 @@ export type DownloadProgressEvent = ActiveDownloadStatus;
 export interface DownloadLogEvent {
   jobId: string;
   line: string;
-  stream: "stdout" | "stderr";
+  stream: "stdout" | "stderr" | "diagnostic";
+  timestamp: string;
 }
 
 export interface DownloadDoneEvent {

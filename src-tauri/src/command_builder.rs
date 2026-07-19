@@ -24,6 +24,7 @@ pub fn build_download_args(
 
     Ok(vec![
         "--ignore-config".into(),
+        "--verbose".into(),
         "--no-playlist".into(),
         "--color".into(),
         "never".into(),
@@ -157,6 +158,7 @@ mod tests {
         assert!(args.contains(&OsString::from("/tools/ffmpeg")));
         assert!(args.contains(&OsString::from("deno:/tools/deno")));
         assert!(args.contains(&OsString::from("--progress")));
+        assert!(args.contains(&OsString::from("--verbose")));
         assert!(args.contains(&OsString::from("--socket-timeout")));
         assert!(args.contains(&OsString::from("--extractor-retries")));
         assert!(args.contains(&OsString::from("never")));

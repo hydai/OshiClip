@@ -102,6 +102,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             executor::get_app_status,
+            executor::get_download_diagnostics,
             executor::set_output_directory,
             executor::start_download,
             executor::cancel_download,

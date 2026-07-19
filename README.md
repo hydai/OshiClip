@@ -10,6 +10,12 @@
 
 OshiClip 可獨立使用，也能承接 [vods.oshi.tw](https://vods.oshi.tw) 產生的片段參數。
 
+## 下載診斷
+
+下載卡片的「執行與診斷日誌」會記錄帶時間戳的 yt-dlp verbose 輸出、工具版本與檔案狀態、平台環境、程序輸出統計及 watchdog 判讀。Windows 在正式下載前也會執行有 20 秒上限的 `yt-dlp --version` 自我檢查，用來區分執行元件無法初始化與後續網路／來源解析問題。任務失敗時日誌會自動展開，可按「複製診斷資訊」直接貼入問題回報。
+
+診斷檔保存在應用程式資料目錄，單檔上限 5 MiB，最多保留最近 20 份。複製與保存前會遮罩使用者家目錄、URL 帳密、query string 與 fragment，避免分享常見的敏感資訊。
+
 ## 歌回資料來源
 
 內建的「歌回資料庫」由 Rust 後端讀取 [`data.oshi.tw` VOD v1 manifest](https://data.oshi.tw/vod/v1/manifest.json)，不依賴 `vods.oshi.tw` 的頁面或瀏覽器 CORS。候選 snapshot 必須通過 trusted URL、HTTP content type、10 MiB 大小上限、SHA-256、schema major、欄位語意、canonical ordering、ID 唯一性與 counts 驗證，才會原子寫入本機 last-known-good 快取。App 啟動後會先顯示快取，上次成功同步超過 24 小時才背景更新，也可由使用者手動同步；更新失敗不會清空已驗證資料。

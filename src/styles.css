@@ -1135,21 +1135,43 @@ summary:focus-visible {
 .result-file strong { overflow: hidden; color: #e6eaf1; font-size: var(--font-label); text-overflow: ellipsis; white-space: nowrap; }
 .result-file small { color: #69758a; font-size: var(--font-caption); }
 
-.log-toggle {
+.log-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
+  gap: 10px;
   margin-top: 18px;
+  border-top: 1px solid rgb(255 255 255 / 7%);
+}
+
+.log-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
   padding: 10px 0;
   color: #69758b;
   border: 0;
-  border-top: 1px solid rgb(255 255 255 / 7%);
   background: none;
   cursor: pointer;
 }
 
 .log-toggle span { display: flex; align-items: center; gap: 5px; font-size: var(--font-caption); }
+.log-copy {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px;
+  color: #9fa9bb;
+  font-size: var(--font-caption);
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 7px;
+  background: rgb(255 255 255 / 5%);
+  cursor: pointer;
+}
+.log-copy:hover:not(:disabled) { color: #d8deea; background: rgb(255 255 255 / 9%); }
+.log-copy:disabled { cursor: wait; opacity: 0.65; }
 .log-panel { max-height: 125px; overflow: auto; margin: 0 0 12px; padding: 10px; color: #9da8bb; font: var(--font-caption)/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; border: 1px solid rgb(255 255 255 / 7%); border-radius: 9px; background: rgb(0 0 0 / 18%); }
 .progress-footer { display: flex; align-items: center; gap: 5px; margin-top: 13px; color: #59667d; font-size: var(--font-caption); }
 

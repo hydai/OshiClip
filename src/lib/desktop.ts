@@ -411,6 +411,7 @@ export async function startDownload(spec: DownloadSpec): Promise<DownloadJob> {
     jobId,
     line: "[preview] 已建立安全的 argv 參數並啟動 yt-dlp",
     stream: "stdout",
+    timestamp: new Date().toISOString(),
   });
   simulationTimer = window.setInterval(() => {
     percent = Math.min(100, percent + 4 + Math.round(Math.random() * 7));
@@ -465,6 +466,16 @@ export async function cancelDownload(jobId: string) {
     message: "下載已取消",
     code: null,
   });
+}
+
+export async function getDownloadDiagnostics(jobId: string): Promise<string> {
+  if (isDesktopRuntime) {
+    return invoke<string>("get_download_diagnostics", { jobId });
+  }
+  return [
+    `${new Date().toISOString()} [diagnostic] OshiClip interactive preview`,
+    `${new Date().toISOString()} [diagnostic] session=${jobId}`,
+  ].join("\n");
 }
 
 export async function revealOutput(path: string) {
