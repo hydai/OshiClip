@@ -1,6 +1,6 @@
 use crate::{
     binary_manager::installation_layout_is_usable,
-    command_builder::build_download_args,
+    command_builder::{build_download_args, DOWNLOAD_STARTED_MARKER},
     error::{AppError, AppResult},
     history::record_completed_download,
     manifest::ManifestStore,
@@ -910,6 +910,13 @@ fn handle_stdout_line(
         return;
     }
 
+    if phase_after_process_line(*base_phase, line) != *base_phase {
+        mark_download_started(target.app, target.job_id, started, base_phase);
+    }
+    if line == DOWNLOAD_STARTED_MARKER {
+        return;
+    }
+
     if let Some(progress) = parse_progress(line) {
         *last_activity = Instant::now();
         *base_phase = DownloadPhase::Downloading;
@@ -975,6 +982,9 @@ fn handle_stderr_line(
         return;
     }
     *last_activity = Instant::now();
+    if phase_after_process_line(*base_phase, line) != *base_phase {
+        mark_download_started(app, job_id, started, base_phase);
+    }
     if let Some(progress) = parse_progress(line) {
         *base_phase = DownloadPhase::Downloading;
         emit_progress_update(
@@ -986,6 +996,34 @@ fn handle_stderr_line(
         );
     } else {
         emit_log(app, job_id, line, "stderr");
+    }
+}
+
+fn phase_after_process_line(current: DownloadPhase, line: &str) -> DownloadPhase {
+    if current == DownloadPhase::Preparing
+        && (line == DOWNLOAD_STARTED_MARKER
+            || line.contains("[debug] Invoking ffmpeg downloader")
+            || line.starts_with("[download] Destination:")
+            || line.starts_with("[debug] ffmpeg command line:"))
+    {
+        DownloadPhase::Downloading
+    } else {
+        current
+    }
+}
+
+fn mark_download_started(
+    app: &AppHandle,
+    job_id: &str,
+    started: Instant,
+    base_phase: &mut DownloadPhase,
+) {
+    *base_phase = DownloadPhase::Downloading;
+    if let Some(status) = update_active_download(app, job_id, |status| {
+        status.phase = DownloadPhase::Downloading;
+        status.elapsed_seconds = started.elapsed().as_secs();
+    }) {
+        emit_download_status(app, &status);
     }
 }
 
@@ -1250,10 +1288,10 @@ fn platform_version() -> String {
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     std::process::Command::new("cmd.exe")
-        .args(["/D", "/C", "ver"])
+        .args(["/D", "/U", "/C", "ver"])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .map(|output| decode_utf16_le(&output.stdout))
         .ok()
         .filter(|version| !version.is_empty())
         .unwrap_or_else(|| "unavailable".into())
@@ -1262,6 +1300,18 @@ fn platform_version() -> String {
 #[cfg(not(windows))]
 fn platform_version() -> String {
     env::consts::OS.into()
+}
+
+#[cfg(any(windows, test))]
+fn decode_utf16_le(bytes: &[u8]) -> String {
+    let code_units = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16_lossy(&code_units)
+        .trim_start_matches('\u{feff}')
+        .trim()
+        .to_owned()
 }
 
 fn format_diagnostic_arguments(arguments: &[OsString]) -> String {
@@ -1891,9 +1941,52 @@ mod tests {
     }
 
     #[test]
+    fn decodes_localized_windows_version_output_as_utf16() {
+        let output = "\u{feff}\r\nMicrosoft Windows [版本 10.0.26200.8655]\r\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decode_utf16_le(&output),
+            "Microsoft Windows [版本 10.0.26200.8655]"
+        );
+    }
+
+    #[test]
     fn formats_observed_file_write_rate() {
         assert_eq!(format_transfer_rate(5.25 * 1024.0 * 1024.0), "5.2 MiB/s");
         assert_eq!(format_transfer_rate(512.0 * 1024.0), "512 KiB/s");
+    }
+
+    #[test]
+    fn treats_ffmpeg_start_as_downloading_before_first_progress_report() {
+        for line in [
+            DOWNLOAD_STARTED_MARKER,
+            "[debug] Invoking ffmpeg downloader on \"https://example.test/video\"",
+            "[download] Destination: C:\\clips\\六等星.mp4",
+            "[debug] ffmpeg command line: ffmpeg -i https://example.test/video",
+        ] {
+            assert_eq!(
+                phase_after_process_line(DownloadPhase::Preparing, line),
+                DownloadPhase::Downloading
+            );
+        }
+
+        let command_config = format!(
+            "[debug] Command-line config: ['--print', 'before_dl:{DOWNLOAD_STARTED_MARKER}']"
+        );
+        assert_eq!(
+            phase_after_process_line(DownloadPhase::Preparing, &command_config),
+            DownloadPhase::Preparing
+        );
+        assert_eq!(
+            phase_after_process_line(DownloadPhase::Finalizing, DOWNLOAD_STARTED_MARKER),
+            DownloadPhase::Finalizing
+        );
+        assert!(
+            inactivity_timeout_message(DownloadPhase::Downloading, Duration::from_secs(90))
+                .is_none()
+        );
     }
 
     #[test]

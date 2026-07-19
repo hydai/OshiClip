@@ -6,6 +6,7 @@ use std::{ffi::OsString, path::Path};
 use url::Url;
 
 const MAX_CLIP_SECONDS: u64 = 6 * 60 * 60;
+pub(crate) const DOWNLOAD_STARTED_MARKER: &str = "OSHICLIP_DOWNLOAD_STARTED";
 
 pub fn build_download_args(
     spec: &DownloadSpec,
@@ -28,6 +29,8 @@ pub fn build_download_args(
         "--no-playlist".into(),
         "--color".into(),
         "never".into(),
+        "--encoding".into(),
+        "utf-8".into(),
         "--socket-timeout".into(),
         "20".into(),
         "--retries".into(),
@@ -60,6 +63,8 @@ pub fn build_download_args(
             .into(),
         "--downloader-args".into(),
         "ffmpeg_o:-progress pipe:1 -nostats".into(),
+        "--print".into(),
+        format!("before_dl:{DOWNLOAD_STARTED_MARKER}").into(),
         "--print".into(),
         "after_move:FINAL %(filepath)s".into(),
         spec.url.trim().into(),
@@ -159,10 +164,18 @@ mod tests {
         assert!(args.contains(&OsString::from("deno:/tools/deno")));
         assert!(args.contains(&OsString::from("--progress")));
         assert!(args.contains(&OsString::from("--verbose")));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == [OsString::from("--encoding"), OsString::from("utf-8")]));
         assert!(args.contains(&OsString::from("--socket-timeout")));
         assert!(args.contains(&OsString::from("--extractor-retries")));
         assert!(args.contains(&OsString::from("never")));
         assert!(args.contains(&OsString::from("ffmpeg_o:-progress pipe:1 -nostats")));
+        assert!(args.windows(2).any(|pair| pair
+            == [
+                OsString::from("--print"),
+                OsString::from(format!("before_dl:{DOWNLOAD_STARTED_MARKER}")),
+            ]));
         assert_eq!(
             args.last(),
             Some(&OsString::from(
